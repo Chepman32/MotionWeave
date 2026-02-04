@@ -17,6 +17,8 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   runOnJS,
+  FadeIn,
+  FadeOut,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
@@ -46,26 +48,36 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     useProjectStore();
 
   const [project, setProject] = useState<Project | null>(null);
-  const [selectedCell, setSelectedCell] = useState<number | null>(null);
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [isAssetsExpanded, setIsAssetsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<
     'layout' | 'effects' | 'audio' | 'export'
   >('layout');
-  const [isImporting, setIsImporting] = useState(false);
+  const [, setIsImporting] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
-  useEffect(() => {
-    initializeProject();
-  }, []);
+  const assetsExpandedProgress = useSharedValue(0);
+  const assetsChevronStyle = useAnimatedStyle(() => ({
+    transform: [{ rotateZ: `${assetsExpandedProgress.value * 180}deg` }],
+  }));
 
-  const initializeProject = async () => {
-    if (projectId && currentProject) {
-      setProject(currentProject);
-    } else {
-      const newProject = createNewProject('New Project', layout);
-      setProject(newProject);
-      setCurrentProject(newProject);
-    }
-  };
+  useEffect(() => {
+    if (project) return;
+
+    const initializeProject = async () => {
+      if (projectId && currentProject) {
+        setProject(currentProject);
+      } else {
+        const newProject = createNewProject('New Project', layout);
+        setProject(newProject);
+        setCurrentProject(newProject);
+      }
+    };
+
+    initializeProject().catch(error =>
+      console.error('Failed to initialize project:', error),
+    );
+  }, [project, projectId, currentProject, layout, setCurrentProject]);
 
   const handlePickMedia = async () => {
     if (!project) return;
@@ -124,18 +136,18 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   };
 
   const handleRemoveMedia = async () => {
-    if (!project || selectedCell === null) return;
-    
-    const updatedVideos = project.videos.filter((_, idx) => idx !== selectedCell);
-    const updatedProject = { 
-      ...project, 
-      videos: updatedVideos, 
-      updatedAt: Date.now() 
+    if (!project || !selectedClipId) return;
+
+    const updatedVideos = project.videos.filter(v => v.id !== selectedClipId);
+    const updatedProject = {
+      ...project,
+      videos: updatedVideos,
+      updatedAt: Date.now(),
     };
-    
+
     setProject(updatedProject);
     await updateProject(project.id, updatedProject);
-    setSelectedCell(null);
+    setSelectedClipId(null);
   };
 
   const handleExport = () => {
@@ -171,6 +183,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       await addProject(project);
       Alert.alert('Success', 'Project saved successfully!');
     } catch (error) {
+      console.error('Failed to save project:', error);
       Alert.alert('Error', 'Failed to save project.');
     }
   };
@@ -187,6 +200,19 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     project.layout.type === 'grid'
       ? (project.layout.rows || 2) * (project.layout.cols || 2)
       : 10;
+
+  const selectedClip = selectedClipId
+    ? project.videos.find(v => v.id === selectedClipId) || null
+    : null;
+
+  const toggleAssetsExpanded = () => {
+    const next = !isAssetsExpanded;
+    setIsAssetsExpanded(next);
+    assetsExpandedProgress.value = withSpring(next ? 1 : 0, {
+      damping: 18,
+      stiffness: 180,
+    });
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -206,20 +232,74 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Canvas Area */}
-      <View style={styles.canvasContainer}>
-        <EditorCanvas
-          layout={project.layout}
-          media={project.videos}
-          selectedCell={selectedCell}
-          onSelectCell={setSelectedCell}
-          onAddMedia={handlePickMedia}
-          isImporting={isImporting}
-        />
+      {/* Assets Area (Accordion) */}
+      <View style={styles.assetsContainer}>
+        <TouchableOpacity
+          onPress={toggleAssetsExpanded}
+          activeOpacity={0.8}
+          style={[
+            styles.assetsAccordionHeader,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
+          <View style={styles.assetsAccordionHeaderLeft}>
+            <Text
+              style={[styles.assetsAccordionTitle, { color: colors.textPrimary }]}
+            >
+              Assets
+            </Text>
+            <Text
+              style={[
+                styles.assetsAccordionSubtitle,
+                { color: colors.textSecondary },
+              ]}
+            >
+              {project.videos.length}/{maxItems} ·{' '}
+              {isAssetsExpanded ? 'Preview' : 'Grid'}
+            </Text>
+          </View>
+          <Animated.Text
+            style={[
+              styles.assetsAccordionChevron,
+              assetsChevronStyle,
+              { color: colors.textSecondary },
+            ]}
+          >
+            ▾
+          </Animated.Text>
+        </TouchableOpacity>
+
+        <View style={styles.assetsContent}>
+          {isAssetsExpanded ? (
+            <Animated.View
+              key="preview"
+              entering={FadeIn.duration(150)}
+              exiting={FadeOut.duration(150)}
+              style={styles.assetsContentInner}
+            >
+              <SelectedClipPreview clip={selectedClip} />
+            </Animated.View>
+          ) : (
+            <Animated.View
+              key="grid"
+              entering={FadeIn.duration(150)}
+              exiting={FadeOut.duration(150)}
+              style={styles.assetsContentInner}
+            >
+              <EditorCanvas
+                layout={project.layout}
+                media={project.videos}
+                selectedClipId={selectedClipId}
+                onSelectClipId={setSelectedClipId}
+                onAddMedia={handlePickMedia}
+              />
+            </Animated.View>
+          )}
+        </View>
       </View>
 
       {/* Remove Button - shown when item selected */}
-      {selectedCell !== null && project.videos[selectedCell] && (
+      {selectedClipId && selectedClip && (
         <View style={styles.removeButtonContainer}>
           <TouchableOpacity
             onPress={handleRemoveMedia}
@@ -238,14 +318,14 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
           Timeline - {project.videos.length} item(s)
         </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {project.videos.map((item, index) => {
-            const isSelected = selectedCell === index;
+          {project.videos.map(item => {
+            const isSelected = selectedClipId === item.id;
             const mediaUri = item.localUri;
             
             return (
               <TouchableOpacity
                 key={item.id}
-                onPress={() => setSelectedCell(index)}
+                onPress={() => setSelectedClipId(item.id)}
                 style={[
                   styles.timelineClip, 
                   { 
@@ -325,13 +405,16 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 const EditorCanvas: React.FC<{
   layout: LayoutConfig;
   media: MediaClip[];
-  selectedCell: number | null;
-  onSelectCell: (cell: number) => void;
+  selectedClipId: string | null;
+  onSelectClipId: (clipId: string) => void;
   onAddMedia: () => void;
-  isImporting: boolean;
-}> = ({ layout, media, selectedCell, onSelectCell, onAddMedia, isImporting }) => {
-  const { colors } = useTheme();
-
+}> = ({
+  layout,
+  media,
+  selectedClipId,
+  onSelectClipId,
+  onAddMedia,
+}) => {
   if (layout.type === 'grid' && layout.rows && layout.cols) {
     const cells = [];
     const cellCount = layout.rows * layout.cols;
@@ -344,10 +427,9 @@ const EditorCanvas: React.FC<{
       cells.push(
         <GridCell
           key={i}
-          index={i}
-          isSelected={selectedCell === i}
+          isSelected={cellMedia?.id === selectedClipId}
           media={cellMedia}
-          onSelect={() => onSelectCell(i)}
+          onSelectMedia={onSelectClipId}
           onAdd={onAddMedia}
           spacing={layout.spacing}
           borderRadius={layout.borderRadius}
@@ -378,24 +460,23 @@ const EditorCanvas: React.FC<{
 };
 
 const GridCell: React.FC<{
-  index: number;
   isSelected: boolean;
   media?: MediaClip;
-  onSelect: () => void;
+  onSelectMedia: (clipId: string) => void;
   onAdd: () => void;
   spacing: number;
   borderRadius: number;
 }> = ({
-  index,
   isSelected,
   media,
-  onSelect,
+  onSelectMedia,
   onAdd,
   spacing,
   borderRadius,
 }) => {
   const { colors } = useTheme();
   const scale = useSharedValue(1);
+  const mediaId = media?.id ?? null;
 
   const tapGesture = Gesture.Tap()
     .onStart(() => {
@@ -403,8 +484,8 @@ const GridCell: React.FC<{
     })
     .onEnd(() => {
       scale.value = withSpring(1);
-      if (media) {
-        runOnJS(onSelect)();
+      if (mediaId) {
+        runOnJS(onSelectMedia)(mediaId);
       } else {
         runOnJS(onAdd)();
       }
@@ -426,6 +507,7 @@ const GridCell: React.FC<{
             borderRadius,
             borderWidth: isSelected ? 2 : 0,
             borderColor: isSelected ? colors.primary : 'transparent',
+            margin: spacing / 2,
           },
           animatedStyle,
         ]}
@@ -453,6 +535,49 @@ const GridCell: React.FC<{
         )}
       </Animated.View>
     </GestureDetector>
+  );
+};
+
+const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => {
+  const { colors } = useTheme();
+
+  return (
+    <View
+      style={[styles.previewContainer, { backgroundColor: '#000000' }]}
+    >
+      {clip ? (
+        <>
+          {clip.type === 'video' ? (
+            <Video
+              source={{ uri: clip.localUri }}
+              style={styles.previewMedia}
+              resizeMode="contain"
+              paused={true}
+              repeat={false}
+            />
+          ) : (
+            <Image
+              source={{ uri: clip.localUri }}
+              style={styles.previewMedia}
+              resizeMode="contain"
+            />
+          )}
+          {clip.type === 'video' && (
+            <View style={styles.previewVideoBadge}>
+              <Text style={styles.previewVideoBadgeText}>VIDEO</Text>
+            </View>
+          )}
+        </>
+      ) : (
+        <View style={styles.previewPlaceholder}>
+          <Text
+            style={[styles.previewPlaceholderText, { color: colors.textSecondary }]}
+          >
+            Select an item on the timeline to preview
+          </Text>
+        </View>
+      )}
+    </View>
   );
 };
 
@@ -509,11 +634,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
   },
-  canvasContainer: {
+  assetsContainer: {
     flex: 1,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.lg,
+  },
+  assetsAccordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  assetsAccordionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  assetsAccordionTitle: {
+    ...TYPOGRAPHY.caption,
+    fontWeight: '700',
+    marginRight: SPACING.sm,
+  },
+  assetsAccordionSubtitle: {
+    ...TYPOGRAPHY.small,
+  },
+  assetsAccordionChevron: {
+    fontSize: 18,
+  },
+  assetsContent: {
+    flex: 1,
+    marginTop: SPACING.md,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: SPACING.lg,
+  },
+  assetsContentInner: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   canvas: {
     width: '100%',
@@ -530,7 +691,6 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    margin: 4,
     overflow: 'hidden',
   },
   cellThumbnail: {
@@ -577,6 +737,45 @@ const styles = StyleSheet.create({
   timelineThumbnail: {
     width: '100%',
     height: '100%',
+  },
+  previewContainer: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 16,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewMedia: {
+    width: '100%',
+    height: '100%',
+  },
+  previewPlaceholder: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.lg,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  previewPlaceholderText: {
+    ...TYPOGRAPHY.body,
+    textAlign: 'center',
+  },
+  previewVideoBadge: {
+    position: 'absolute',
+    top: SPACING.md,
+    left: SPACING.md,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  previewVideoBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   toolsDrawer: {
     height: 200,
