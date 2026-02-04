@@ -1,5 +1,5 @@
 import RNFS from 'react-native-fs';
-import { LayoutConfig, VideoClip, FilterConfig } from '../../shared/types';
+import { LayoutConfig, MediaClip, FilterConfig } from '../../shared/types';
 
 export interface ExportOptions {
   resolution: '720p' | '1080p' | '2k' | '4k';
@@ -45,7 +45,7 @@ export class FFmpegService {
   }
 
   static async composeVideo(
-    clips: VideoClip[],
+    clips: MediaClip[],
     layout: LayoutConfig,
     options: ExportOptions,
     onProgress?: (progress: ExportProgress) => void,
@@ -86,7 +86,7 @@ export class FFmpegService {
 
   // Private helper methods kept for future implementation
   private static buildFFmpegCommand(
-    clips: VideoClip[],
+    clips: MediaClip[],
     layout: LayoutConfig,
     options: ExportOptions,
     outputPath: string,
@@ -109,7 +109,7 @@ export class FFmpegService {
   }
 
   private static buildGridCommand(
-    clips: VideoClip[],
+    clips: MediaClip[],
     layout: LayoutConfig,
     resolution: { width: number; height: number },
     crf: number,

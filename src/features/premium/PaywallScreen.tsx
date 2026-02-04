@@ -147,7 +147,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
       />
 
       {/* Close Button */}
-      <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+      <TouchableOpacity onPress={onClose} style={[styles.closeButton, { top: insets.top + SPACING.md }]}>
         <Text style={{ fontSize: 28, color: colors.textPrimary }}>×</Text>
       </TouchableOpacity>
 
@@ -387,7 +387,6 @@ const styles = StyleSheet.create({
   },
   closeButton: {
     position: 'absolute',
-    top: insets.top + SPACING.md,
     right: SPACING.lg,
     zIndex: 10,
     width: 40,

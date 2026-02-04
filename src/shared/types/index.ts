@@ -1,4 +1,5 @@
 export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | 'custom';
+export type MediaType = 'video' | 'image';
 
 export interface Project {
   id: string;
@@ -8,14 +9,16 @@ export interface Project {
   thumbnailPath: string;
   duration: number;
   layout: LayoutConfig;
-  videos: VideoClip[];
+  videos: MediaClip[];
   outputPath?: string;
   settings: ProjectSettings;
 }
 
-export interface VideoClip {
+export interface MediaClip {
   id: string;
   localUri: string;
+  thumbnailUri?: string;
+  type: MediaType;
   duration: number;
   startTime: number;
   endTime: number;

@@ -44,6 +44,7 @@ describe('Project Utils', () => {
         {
           id: '1',
           localUri: '/path/to/video.mp4',
+          type: 'video',
           duration: 10,
           startTime: 0,
           endTime: 10,
@@ -62,7 +63,6 @@ describe('Project Utils', () => {
     it('should reject project with empty name', () => {
       const project = createNewProject('');
       const result = validateProject(project);
-
       expect(result.valid).toBe(false);
       expect(result.errors).toContain('Project name is required');
     });
@@ -88,6 +88,7 @@ describe('Project Utils', () => {
         {
           id: '1',
           localUri: '/path/to/video1.mp4',
+          type: 'video',
           duration: 10,
           startTime: 0,
           endTime: 10,
@@ -99,6 +100,7 @@ describe('Project Utils', () => {
         {
           id: '2',
           localUri: '/path/to/video2.mp4',
+          type: 'video',
           duration: 15,
           startTime: 0,
           endTime: 15,

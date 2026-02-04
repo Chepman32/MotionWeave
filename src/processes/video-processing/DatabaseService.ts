@@ -1,5 +1,5 @@
 import SQLite from 'react-native-sqlite-storage';
-import { Project, VideoClip } from '../../shared/types';
+import { Project, MediaClip } from '../../shared/types';
 
 SQLite.enablePromise(true);
 
@@ -24,6 +24,14 @@ export class DatabaseService {
   private static async createTables(): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
+    // Migration: Drop old video_clips table if it exists
+    try {
+      await this.db.executeSql('DROP TABLE IF EXISTS video_clips;');
+      console.log('✓ Migrated: dropped old video_clips table');
+    } catch (e) {
+      // Table might not exist, that's fine
+    }
+
     const createProjectsTable = `
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
@@ -39,11 +47,13 @@ export class DatabaseService {
       );
     `;
 
-    const createVideoClipsTable = `
-      CREATE TABLE IF NOT EXISTS video_clips (
+    const createMediaClipsTable = `
+      CREATE TABLE IF NOT EXISTS media_clips (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         local_uri TEXT NOT NULL,
+        thumbnail_uri TEXT,
+        type TEXT DEFAULT 'video',
         duration REAL NOT NULL,
         start_time REAL DEFAULT 0,
         end_time REAL,
@@ -63,8 +73,9 @@ export class DatabaseService {
     `;
 
     await this.db.executeSql(createProjectsTable);
-    await this.db.executeSql(createVideoClipsTable);
+    await this.db.executeSql(createMediaClipsTable);
     await this.db.executeSql(createPreferencesTable);
+    console.log('✓ Database tables created');
   }
 
   // Project CRUD Operations
@@ -94,7 +105,7 @@ export class DatabaseService {
 
     // Save video clips
     for (const clip of project.videos) {
-      await this.saveVideoClip(project.id, clip);
+      await this.saveMediaClip(project.id, clip);
     }
   }
 
@@ -107,7 +118,7 @@ export class DatabaseService {
     if (result.rows.length === 0) return null;
 
     const row = result.rows.item(0);
-    const videos = await this.getVideoClips(id);
+    const videos = await this.getMediaClips(id);
 
     return {
       id: row.id,
@@ -116,11 +127,19 @@ export class DatabaseService {
       updatedAt: row.updated_at,
       thumbnailPath: row.thumbnail_path,
       duration: row.duration,
-      layout: JSON.parse(row.layout_config),
+      layout: this.safeJsonParse(row.layout_config, { type: 'grid', rows: 2, cols: 2, spacing: 8, borderRadius: 12, aspectRatio: '1:1' }),
       videos,
       outputPath: row.export_path,
-      settings: JSON.parse(row.settings),
+      settings: this.safeJsonParse(row.settings, { resolution: '1080p', frameRate: 30, quality: 'high', format: 'mp4' }),
     };
+  }
+
+  private static safeJsonParse(jsonString: string | null, defaultValue: any): any {
+    try {
+      return jsonString ? JSON.parse(jsonString) : defaultValue;
+    } catch (e) {
+      return defaultValue;
+    }
   }
 
   static async getAllProjects(): Promise<Project[]> {
@@ -133,7 +152,7 @@ export class DatabaseService {
 
     for (let i = 0; i < result.rows.length; i++) {
       const row = result.rows.item(i);
-      const videos = await this.getVideoClips(row.id);
+      const videos = await this.getMediaClips(row.id);
 
       projects.push({
         id: row.id,
@@ -142,10 +161,10 @@ export class DatabaseService {
         updatedAt: row.updated_at,
         thumbnailPath: row.thumbnail_path,
         duration: row.duration,
-        layout: JSON.parse(row.layout_config),
+        layout: this.safeJsonParse(row.layout_config, { type: 'grid', rows: 2, cols: 2, spacing: 8, borderRadius: 12, aspectRatio: '1:1' }),
         videos,
         outputPath: row.export_path,
-        settings: JSON.parse(row.settings),
+        settings: this.safeJsonParse(row.settings, { resolution: '1080p', frameRate: 30, quality: 'high', format: 'mp4' }),
       });
     }
 
@@ -155,29 +174,31 @@ export class DatabaseService {
   static async deleteProject(id: string): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
-    await this.db.executeSql('DELETE FROM video_clips WHERE project_id = ?', [
+    await this.db.executeSql('DELETE FROM media_clips WHERE project_id = ?', [
       id,
     ]);
     await this.db.executeSql('DELETE FROM projects WHERE id = ?', [id]);
   }
 
-  // Video Clip Operations
-  private static async saveVideoClip(
+  // Media Clip Operations
+  private static async saveMediaClip(
     projectId: string,
-    clip: VideoClip,
+    clip: MediaClip,
   ): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
     const query = `
-      INSERT OR REPLACE INTO video_clips
-      (id, project_id, local_uri, duration, start_time, end_time, position, transform_config, filters, volume)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO media_clips
+      (id, project_id, local_uri, thumbnail_uri, type, duration, start_time, end_time, position, transform_config, filters, volume)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
       clip.id,
       projectId,
       clip.localUri,
+      clip.thumbnailUri || null,
+      clip.type,
       clip.duration,
       clip.startTime,
       clip.endTime,
@@ -190,19 +211,21 @@ export class DatabaseService {
     await this.db.executeSql(query, params);
   }
 
-  private static async getVideoClips(projectId: string): Promise<VideoClip[]> {
+  private static async getMediaClips(projectId: string): Promise<MediaClip[]> {
     if (!this.db) throw new Error('Database not initialized');
 
-    const query = 'SELECT * FROM video_clips WHERE project_id = ?';
+    const query = 'SELECT * FROM media_clips WHERE project_id = ?';
     const [result] = await this.db.executeSql(query, [projectId]);
 
-    const clips: VideoClip[] = [];
+    const clips: MediaClip[] = [];
 
     for (let i = 0; i < result.rows.length; i++) {
       const row = result.rows.item(i);
       clips.push({
         id: row.id,
         localUri: row.local_uri,
+        thumbnailUri: row.thumbnail_uri,
+        type: row.type || 'video',
         duration: row.duration,
         startTime: row.start_time,
         endTime: row.end_time,

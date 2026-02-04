@@ -8,7 +8,9 @@ import {
   ScrollView,
   Alert,
   StatusBar,
+  Image,
 } from 'react-native';
+import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -19,10 +21,9 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
-import { VideoClip, LayoutConfig, Project } from '../../shared/types';
-import { VideoPickerModal } from './VideoPickerModal';
+import { MediaClip, LayoutConfig, Project } from '../../shared/types';
+import { VideoImportService } from '../../processes/video-processing/VideoImportService';
 import { ExportModal } from '../export/ExportModal';
-import { ImportedVideo } from '../../processes/video-processing/VideoImportService';
 import { useProjectStore } from '../../entities/project/store';
 import { createNewProject } from '../../entities/project/utils';
 
@@ -49,7 +50,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const [activeTab, setActiveTab] = useState<
     'layout' | 'effects' | 'audio' | 'export'
   >('layout');
-  const [showVideoPicker, setShowVideoPicker] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
 
   useEffect(() => {
@@ -66,42 +67,80 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     }
   };
 
-  const handleVideosSelected = async (videos: ImportedVideo[]) => {
+  const handlePickMedia = async () => {
     if (!project) return;
+    
+    try {
+      setIsImporting(true);
+      const availableSlots = maxItems - project.videos.length;
+      
+      if (availableSlots <= 0) {
+        Alert.alert('Grid Full', `Maximum ${maxItems} items allowed.`);
+        return;
+      }
+      
+      const media = await VideoImportService.pickMedia(availableSlots);
+      
+      if (media.length === 0) {
+        return; // User cancelled
+      }
 
-    const videoClips: VideoClip[] = videos.map((video, index) => ({
-      id: video.id,
-      localUri: video.localPath,
-      duration: video.duration,
-      startTime: 0,
-      endTime: video.duration,
-      position: {
-        row: Math.floor(index / (project.layout.cols || 2)),
-        col: index % (project.layout.cols || 2),
-      },
-      transform: {
-        scale: 1,
-        translateX: 0,
-        translateY: 0,
-        rotation: 0,
-      },
-      filters: [],
-      volume: 1.0,
-    }));
+      const mediaClips: MediaClip[] = media.map((item, index) => ({
+        id: item.id,
+        localUri: item.localPath,
+        thumbnailUri: item.thumbnailPath,
+        type: item.type,
+        duration: item.duration,
+        startTime: 0,
+        endTime: item.duration,
+        position: {
+          row: Math.floor((project.videos.length + index) / (project.layout.cols || 2)),
+          col: (project.videos.length + index) % (project.layout.cols || 2),
+        },
+        transform: {
+          scale: 1,
+          translateX: 0,
+          translateY: 0,
+          rotation: 0,
+        },
+        filters: [],
+        volume: 1.0,
+      }));
 
-    const updatedProject = {
-      ...project,
-      videos: [...project.videos, ...videoClips],
-      updatedAt: Date.now(),
+      const updatedProject = {
+        ...project,
+        videos: [...project.videos, ...mediaClips],
+        updatedAt: Date.now(),
+      };
+
+      setProject(updatedProject);
+      await updateProject(project.id, updatedProject);
+    } catch (error) {
+      console.error('Failed to pick media:', error);
+      Alert.alert('Error', 'Failed to import media. Please try again.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleRemoveMedia = async () => {
+    if (!project || selectedCell === null) return;
+    
+    const updatedVideos = project.videos.filter((_, idx) => idx !== selectedCell);
+    const updatedProject = { 
+      ...project, 
+      videos: updatedVideos, 
+      updatedAt: Date.now() 
     };
-
+    
     setProject(updatedProject);
     await updateProject(project.id, updatedProject);
+    setSelectedCell(null);
   };
 
   const handleExport = () => {
     if (!project || project.videos.length === 0) {
-      Alert.alert('No Videos', 'Please add videos before exporting.');
+      Alert.alert('No Media', 'Please add videos or images before exporting.');
       return;
     }
     setShowExportModal(true);
@@ -125,7 +164,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 
     try {
       if (project.videos.length === 0) {
-        Alert.alert('Empty Project', 'Please add videos before saving.');
+        Alert.alert('Empty Project', 'Please add media before saving.');
         return;
       }
 
@@ -144,7 +183,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     );
   }
 
-  const maxVideos =
+  const maxItems =
     project.layout.type === 'grid'
       ? (project.layout.rows || 2) * (project.layout.cols || 2)
       : 10;
@@ -171,31 +210,73 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       <View style={styles.canvasContainer}>
         <EditorCanvas
           layout={project.layout}
-          videos={project.videos}
+          media={project.videos}
           selectedCell={selectedCell}
           onSelectCell={setSelectedCell}
-          onAddVideo={() => setShowVideoPicker(true)}
+          onAddMedia={handlePickMedia}
+          isImporting={isImporting}
         />
       </View>
+
+      {/* Remove Button - shown when item selected */}
+      {selectedCell !== null && project.videos[selectedCell] && (
+        <View style={styles.removeButtonContainer}>
+          <TouchableOpacity
+            onPress={handleRemoveMedia}
+            style={[styles.removeButton, { backgroundColor: colors.error }]}
+          >
+            <Text style={styles.removeButtonIcon}>🗑️</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Timeline Area */}
       <View
         style={[styles.timelineContainer, { backgroundColor: colors.surface }]}
       >
         <Text style={[styles.timelineLabel, { color: colors.textSecondary }]}>
-          Timeline - {project.videos.length} video(s)
+          Timeline - {project.videos.length} item(s)
         </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {project.videos.map((video, index) => (
-            <View
-              key={video.id}
-              style={[styles.timelineClip, { backgroundColor: colors.border }]}
-            >
-              <Text style={{ fontSize: 10, color: colors.textPrimary }}>
-                {index + 1}
-              </Text>
-            </View>
-          ))}
+          {project.videos.map((item, index) => {
+            const isSelected = selectedCell === index;
+            const mediaUri = item.localUri;
+            
+            return (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => setSelectedCell(index)}
+                style={[
+                  styles.timelineClip, 
+                  { 
+                    backgroundColor: colors.border,
+                    borderWidth: isSelected ? 2 : 0,
+                    borderColor: colors.primary,
+                  }
+                ]}
+              >
+                {item.type === 'video' && mediaUri ? (
+                  <Video
+                    source={{ uri: mediaUri }}
+                    style={styles.timelineThumbnail}
+                    resizeMode="cover"
+                    paused={true}
+                    repeat={false}
+                  />
+                ) : item.type === 'image' && mediaUri ? (
+                  <Image
+                    source={{ uri: mediaUri }}
+                    style={styles.timelineThumbnail}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Text style={{ fontSize: 10, color: colors.textPrimary }}>
+                    {item.type === 'video' ? '🎬' : '🖼️'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -231,13 +312,6 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       </View>
 
       {/* Modals */}
-      <VideoPickerModal
-        isVisible={showVideoPicker}
-        onClose={() => setShowVideoPicker(false)}
-        onVideosSelected={handleVideosSelected}
-        maxVideos={maxVideos}
-      />
-
       <ExportModal
         isVisible={showExportModal}
         onClose={() => setShowExportModal(false)}
@@ -250,11 +324,12 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 
 const EditorCanvas: React.FC<{
   layout: LayoutConfig;
-  videos: VideoClip[];
+  media: MediaClip[];
   selectedCell: number | null;
   onSelectCell: (cell: number) => void;
-  onAddVideo: () => void;
-}> = ({ layout, videos, selectedCell, onSelectCell, onAddVideo }) => {
+  onAddMedia: () => void;
+  isImporting: boolean;
+}> = ({ layout, media, selectedCell, onSelectCell, onAddMedia, isImporting }) => {
   const { colors } = useTheme();
 
   if (layout.type === 'grid' && layout.rows && layout.cols) {
@@ -262,8 +337,8 @@ const EditorCanvas: React.FC<{
     const cellCount = layout.rows * layout.cols;
 
     for (let i = 0; i < cellCount; i++) {
-      const hasVideo = videos.some(
-        v => v.position.row * (layout.cols || 2) + v.position.col === i,
+      const cellMedia = media.find(
+        m => m.position.row * (layout.cols || 2) + m.position.col === i,
       );
 
       cells.push(
@@ -271,9 +346,9 @@ const EditorCanvas: React.FC<{
           key={i}
           index={i}
           isSelected={selectedCell === i}
-          hasVideo={hasVideo}
+          media={cellMedia}
           onSelect={() => onSelectCell(i)}
-          onAdd={onAddVideo}
+          onAdd={onAddMedia}
           spacing={layout.spacing}
           borderRadius={layout.borderRadius}
         />,
@@ -305,7 +380,7 @@ const EditorCanvas: React.FC<{
 const GridCell: React.FC<{
   index: number;
   isSelected: boolean;
-  hasVideo: boolean;
+  media?: MediaClip;
   onSelect: () => void;
   onAdd: () => void;
   spacing: number;
@@ -313,7 +388,7 @@ const GridCell: React.FC<{
 }> = ({
   index,
   isSelected,
-  hasVideo,
+  media,
   onSelect,
   onAdd,
   spacing,
@@ -328,7 +403,7 @@ const GridCell: React.FC<{
     })
     .onEnd(() => {
       scale.value = withSpring(1);
-      if (hasVideo) {
+      if (media) {
         runOnJS(onSelect)();
       } else {
         runOnJS(onAdd)();
@@ -339,22 +414,43 @@ const GridCell: React.FC<{
     transform: [{ scale: scale.value }],
   }));
 
+  const mediaUri = media?.localUri;
+
   return (
     <GestureDetector gesture={tapGesture}>
       <Animated.View
         style={[
           styles.gridCell,
           {
-            backgroundColor: hasVideo ? colors.primary : colors.border,
+            backgroundColor: media ? colors.surface : colors.border,
             borderRadius,
             borderWidth: isSelected ? 2 : 0,
             borderColor: isSelected ? colors.primary : 'transparent',
-            opacity: hasVideo ? 0.8 : 0.3,
           },
           animatedStyle,
         ]}
       >
-        <Text style={{ fontSize: 32, opacity: hasVideo ? 0 : 0.5 }}>+</Text>
+        {media?.type === 'video' && mediaUri ? (
+          <Video
+            source={{ uri: mediaUri }}
+            style={[styles.cellThumbnail, { borderRadius }]}
+            resizeMode="cover"
+            paused={true}
+            repeat={false}
+          />
+        ) : media?.type === 'image' && mediaUri ? (
+          <Image
+            source={{ uri: mediaUri }}
+            style={[styles.cellThumbnail, { borderRadius }]}
+            resizeMode="cover"
+          />
+        ) : media ? (
+          <Text style={{ fontSize: 32 }}>
+            {media.type === 'video' ? '🎬' : '🖼️'}
+          </Text>
+        ) : (
+          <Text style={{ fontSize: 32, opacity: 0.5 }}>+</Text>
+        )}
       </Animated.View>
     </GestureDetector>
   );
@@ -435,6 +531,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     margin: 4,
+    overflow: 'hidden',
+  },
+  cellThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  removeButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  removeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  removeButtonIcon: {
+    fontSize: 20,
   },
   timelineContainer: {
     height: 100,
@@ -454,6 +572,11 @@ const styles = StyleSheet.create({
     marginRight: SPACING.sm,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  timelineThumbnail: {
+    width: '100%',
+    height: '100%',
   },
   toolsDrawer: {
     height: 200,

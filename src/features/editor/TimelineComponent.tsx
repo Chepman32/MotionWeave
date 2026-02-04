@@ -16,10 +16,10 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
-import { VideoClip } from '../../shared/types';
+import { MediaClip } from '../../shared/types';
 
 interface TimelineComponentProps {
-  clips: VideoClip[];
+  clips: MediaClip[];
   currentTime: number;
   duration: number;
   onSeek: (time: number) => void;
@@ -141,7 +141,7 @@ export const TimelineComponent: React.FC<TimelineComponentProps> = ({
 };
 
 const TimelineClip: React.FC<{
-  clip: VideoClip;
+  clip: MediaClip;
   index: number;
   zoom: number;
   isSelected: boolean;

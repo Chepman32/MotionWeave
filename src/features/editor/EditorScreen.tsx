@@ -17,7 +17,7 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
-import { VideoClip, LayoutConfig } from '../../shared/types';
+import { MediaClip, LayoutConfig } from '../../shared/types';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
