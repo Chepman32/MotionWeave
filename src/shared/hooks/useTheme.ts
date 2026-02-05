@@ -1,13 +1,14 @@
-import { useColorScheme } from 'react-native';
-import { COLORS, GRADIENTS } from '../constants/theme';
+import { THEMES } from '../constants/theme';
+import { useThemeStore } from '../stores/themeStore';
 
 export const useTheme = () => {
-  const colorScheme = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeStore(state => state.theme);
+  const definition = THEMES[theme];
 
   return {
-    colors: isDark ? COLORS.dark : COLORS.light,
-    gradients: GRADIENTS,
-    isDark,
+    colors: definition.colors,
+    gradients: definition.gradients,
+    isDark: definition.isDark,
+    theme: definition.name,
   };
 };

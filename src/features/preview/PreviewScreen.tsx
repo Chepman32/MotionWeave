@@ -6,7 +6,9 @@ import {
   TouchableOpacity,
   Dimensions,
   StatusBar,
+  Image,
 } from 'react-native';
+import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -17,19 +19,24 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+import { AppIcon } from '../../shared/components/AppIcon';
+import { LayoutConfig, MediaClip, Project } from '../../shared/types';
+import { normalizeMediaUri } from '../../shared/utils/helpers';
 
 interface PreviewScreenProps {
+  project: Project;
   onBack: () => void;
-  onExport: () => void;
+  onExport?: () => void;
+  soundEnabled?: boolean;
 }
 
 export const PreviewScreen: React.FC<PreviewScreenProps> = ({
+  project,
   onBack,
   onExport,
+  soundEnabled = true,
 }) => {
-  const { colors, isDark } = useTheme();
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -59,59 +66,168 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
       {/* Video Player Area */}
       <GestureDetector gesture={tapGesture}>
         <View style={styles.videoContainer}>
-          <View style={styles.videoPlaceholder}>
-            <Text style={styles.placeholderText}>Video Preview</Text>
-          </View>
+          <CompositionPreview
+            layout={project.layout}
+            clips={project.videos}
+            isPlaying={isPlaying}
+            soundEnabled={soundEnabled}
+          />
         </View>
       </GestureDetector>
 
       {/* Top Controls */}
-      <Animated.View style={[styles.topControls, controlsStyle]}>
+      <Animated.View
+        style={[
+          styles.topControls,
+          { paddingTop: insets.top + SPACING.sm },
+          controlsStyle,
+        ]}
+      >
         <TouchableOpacity onPress={onBack} style={styles.controlButton}>
-          <Text style={styles.controlIcon}>←</Text>
+          <AppIcon name="chevron-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <Text style={styles.title}>Preview</Text>
-        <TouchableOpacity onPress={onExport} style={styles.controlButton}>
-          <Text style={styles.controlIcon}>↗</Text>
-        </TouchableOpacity>
+        {onExport ? (
+          <TouchableOpacity onPress={onExport} style={styles.controlButton}>
+            <AppIcon name="share-outline" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.controlButton} />
+        )}
       </Animated.View>
 
       {/* Bottom Controls */}
-      <Animated.View style={[styles.bottomControls, controlsStyle]}>
-        {/* Timeline */}
-        <View style={styles.timeline}>
-          <View
-            style={[
-              styles.timelineProgress,
-              { backgroundColor: colors.primary },
-            ]}
+      <Animated.View
+        style={[
+          styles.bottomControls,
+          { paddingBottom: insets.bottom + SPACING.lg },
+          controlsStyle,
+        ]}
+      >
+        <TouchableOpacity onPress={togglePlayPause} style={styles.playButton}>
+          <AppIcon
+            name={isPlaying ? 'pause' : 'play'}
+            size={22}
+            color="#FFFFFF"
           />
-        </View>
-
-        {/* Playback Controls */}
-        <View style={styles.playbackControls}>
-          <Text style={styles.timeText}>0:00</Text>
-
-          <View style={styles.centerControls}>
-            <TouchableOpacity style={styles.skipButton}>
-              <Text style={styles.controlIcon}>⏮</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={togglePlayPause}
-              style={styles.playButton}
-            >
-              <Text style={styles.playIcon}>{isPlaying ? '⏸' : '▶'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.skipButton}>
-              <Text style={styles.controlIcon}>⏭</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.timeText}>0:00</Text>
-        </View>
+          <Text style={styles.playLabel}>
+            {isPlaying ? 'Pause' : 'Play'}
+          </Text>
+        </TouchableOpacity>
       </Animated.View>
+    </View>
+  );
+};
+
+const getAspectRatio = (aspectRatio: LayoutConfig['aspectRatio']): number => {
+  switch (aspectRatio) {
+    case '16:9':
+      return 16 / 9;
+    case '9:16':
+      return 9 / 16;
+    case '4:3':
+      return 4 / 3;
+    case '1:1':
+    default:
+      return 1;
+  }
+};
+
+const CompositionPreview: React.FC<{
+  layout: LayoutConfig;
+  clips: MediaClip[];
+  isPlaying: boolean;
+  soundEnabled: boolean;
+}> = ({ layout, clips, isPlaying, soundEnabled }) => {
+  const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+  const aspectRatio = getAspectRatio(layout.aspectRatio);
+
+  const maxWidth = windowWidth;
+  const maxHeight = windowHeight;
+  const previewWidth = Math.min(maxWidth, maxHeight * aspectRatio);
+  const previewHeight = previewWidth / aspectRatio;
+
+  const firstVideoId = clips.find(c => c.type === 'video')?.id ?? null;
+
+  if (layout.type !== 'grid' || !layout.rows || !layout.cols) {
+    const first = clips[0] ?? null;
+      return (
+      <View style={[styles.composition, { width: previewWidth, height: previewHeight }]}>
+        {first ? (
+          first.type === 'video' ? (
+            <Video
+              source={{ uri: normalizeMediaUri(first.localUri) }}
+              style={styles.compositionMedia}
+              resizeMode="contain"
+              paused={!isPlaying}
+              repeat={true}
+              muted={!soundEnabled}
+            />
+          ) : (
+            <Image
+              source={{ uri: normalizeMediaUri(first.localUri) }}
+              style={styles.compositionMedia}
+              resizeMode="contain"
+            />
+          )
+        ) : (
+          <View style={styles.emptyComposition}>
+            <AppIcon name="videocam-outline" size={28} color="#FFFFFF" />
+            <Text style={styles.emptyText}>No media</Text>
+          </View>
+        )}
+      </View>
+    );
+  }
+
+  const rows = layout.rows;
+  const cols = layout.cols;
+  const cellCount = rows * cols;
+  const cellWidth = previewWidth / cols;
+  const cellHeight = previewHeight / rows;
+
+  return (
+    <View style={[styles.composition, { width: previewWidth, height: previewHeight }]}>
+      <View style={[styles.grid, { padding: layout.spacing / 2 }]}>
+        {Array.from({ length: cellCount }).map((_, i) => {
+          const clip = clips.find(
+            c => c.position.row * cols + c.position.col === i,
+          );
+
+          return (
+            <View
+              key={i}
+              style={[
+                styles.cellWrapper,
+                { width: cellWidth, height: cellHeight, padding: layout.spacing / 2 },
+              ]}
+            >
+              <View style={[styles.cell, { borderRadius: layout.borderRadius }]}>
+                {clip ? (
+                  clip.type === 'video' ? (
+                    <Video
+                      source={{ uri: normalizeMediaUri(clip.localUri) }}
+                      style={styles.compositionMedia}
+                      resizeMode="cover"
+                      paused={!isPlaying}
+                      repeat={true}
+                      muted={!soundEnabled || clip.id !== firstVideoId}
+                    />
+                  ) : (
+                    <Image
+                      source={{ uri: normalizeMediaUri(clip.localUri) }}
+                      style={styles.compositionMedia}
+                      resizeMode="cover"
+                    />
+                  )
+                ) : (
+                  <View style={styles.emptyCell} />
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </View>
     </View>
   );
 };
@@ -125,18 +241,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  videoPlaceholder: {
-    width: SCREEN_WIDTH * 0.9,
-    aspectRatio: 1,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
+  composition: {
+    backgroundColor: '#000000',
+    overflow: 'hidden',
+  },
+  grid: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  cellWrapper: {},
+  cell: {
+    flex: 1,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+  },
+  emptyCell: {
+    flex: 1,
+    backgroundColor: '#000000',
+    opacity: 0.2,
+  },
+  compositionMedia: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000',
+  },
+  emptyComposition: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: SPACING.sm,
   },
-  placeholderText: {
+  emptyText: {
     color: '#FFFFFF',
-    fontSize: 18,
-    opacity: 0.5,
+    opacity: 0.7,
+    ...TYPOGRAPHY.body,
   },
   topControls: {
     position: 'absolute',
@@ -157,58 +296,29 @@ const styles = StyleSheet.create({
   controlButton: {
     padding: SPACING.sm,
   },
-  controlIcon: {
-    fontSize: 24,
-    color: '#FFFFFF',
-  },
   bottomControls: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     paddingHorizontal: SPACING.lg,
-    paddingBottom: SPACING.xl,
     paddingTop: SPACING.md,
     backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  timeline: {
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 2,
-    marginBottom: SPACING.md,
-  },
-  timelineProgress: {
-    height: '100%',
-    width: '30%',
-    borderRadius: 2,
-  },
-  playbackControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  timeText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-  },
-  centerControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: SPACING.lg,
-  },
-  skipButton: {
-    padding: SPACING.sm,
-  },
   playButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    gap: SPACING.sm,
   },
-  playIcon: {
-    fontSize: 24,
+  playLabel: {
+    ...TYPOGRAPHY.body,
     color: '#FFFFFF',
+    fontWeight: '600',
   },
 });

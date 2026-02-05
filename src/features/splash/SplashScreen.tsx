@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -10,16 +10,8 @@ import Animated, {
   Easing,
   runOnJS,
 } from 'react-native-reanimated';
-import {
-  Canvas,
-  Group,
-  RoundedRect,
-  useFont,
-} from '@shopify/react-native-skia';
 import LinearGradient from 'react-native-linear-gradient';
 import { useTheme } from '../../shared/hooks/useTheme';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface SplashScreenProps {
   onComplete: () => void;
@@ -50,7 +42,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onComplete }) => {
         }),
       ),
     );
-  }, []);
+  }, [logoOpacity, logoScale, onComplete, progress]);
 
   const logoAnimatedStyle = useAnimatedStyle(() => ({
     opacity: logoOpacity.value,

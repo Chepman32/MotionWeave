@@ -5,6 +5,7 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withTiming,
+  runOnJS,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { BlurView } from '@react-native-community/blur';
@@ -37,7 +38,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
       translateY.value = withSpring(SCREEN_HEIGHT);
       backdropOpacity.value = withTiming(0, { duration: 300 });
     }
-  }, [isVisible]);
+  }, [backdropOpacity, isVisible, snapPoints, translateY]);
 
   const panGesture = Gesture.Pan()
     .onUpdate(e => {
@@ -50,7 +51,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
       if (e.velocityY > 500 || translateY.value > SCREEN_HEIGHT * 0.6) {
         translateY.value = withSpring(SCREEN_HEIGHT);
         backdropOpacity.value = withTiming(0);
-        onClose();
+        runOnJS(onClose)();
       } else {
         const closestSnapPoint = snapPoints.reduce((prev, curr) => {
           const prevDist = Math.abs(

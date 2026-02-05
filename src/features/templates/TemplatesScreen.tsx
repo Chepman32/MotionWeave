@@ -19,6 +19,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 import { Template } from '../../shared/types';
+import { AppBottomNav } from '../../shared/components/AppBottomNav';
+import { AppIcon } from '../../shared/components/AppIcon';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -108,11 +110,13 @@ const TEMPLATES: Template[] = [
 interface TemplatesScreenProps {
   onBack: () => void;
   onSelectTemplate: (template: Template) => void;
+  onNavigateToSettings?: () => void;
 }
 
 export const TemplatesScreen: React.FC<TemplatesScreenProps> = ({
   onBack,
   onSelectTemplate,
+  onNavigateToSettings,
 }) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -131,7 +135,11 @@ export const TemplatesScreen: React.FC<TemplatesScreenProps> = ({
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + SPACING.md }]}>
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
-          <Text style={{ fontSize: 24 }}>←</Text>
+          <AppIcon
+            name="chevron-back"
+            size={24}
+            color={colors.textPrimary}
+          />
         </TouchableOpacity>
         <Text style={[styles.title, { color: colors.textPrimary }]}>
           Templates
@@ -162,16 +170,23 @@ export const TemplatesScreen: React.FC<TemplatesScreenProps> = ({
         contentContainerStyle={styles.contentContainer}
       >
         <View style={styles.templatesGrid}>
-          {filteredTemplates.map((template, index) => (
+          {filteredTemplates.map(template => (
             <TemplateCard
               key={template.id}
               template={template}
-              index={index}
               onPress={() => onSelectTemplate(template)}
             />
           ))}
         </View>
       </ScrollView>
+
+      <AppBottomNav
+        activeTab="templates"
+        onSelectTab={tab => {
+          if (tab === 'home') onBack();
+          if (tab === 'settings') onNavigateToSettings?.();
+        }}
+      />
     </View>
   );
 };
@@ -181,7 +196,7 @@ const CategoryChip: React.FC<{
   isActive: boolean;
   onPress: () => void;
 }> = ({ label, isActive, onPress }) => {
-  const { colors, gradients } = useTheme();
+  const { colors } = useTheme();
 
   return (
     <TouchableOpacity
@@ -207,9 +222,8 @@ const CategoryChip: React.FC<{
 
 const TemplateCard: React.FC<{
   template: Template;
-  index: number;
   onPress: () => void;
-}> = ({ template, index, onPress }) => {
+}> = ({ template, onPress }) => {
   const { colors } = useTheme();
   const scale = useSharedValue(1);
 
@@ -288,7 +302,6 @@ const TemplatePreview: React.FC<{ layout: any }> = ({ layout }) => {
         style={[
           styles.previewGrid,
           {
-            gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
             gap: layout.spacing / 2,
           },
         ]}

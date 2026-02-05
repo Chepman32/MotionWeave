@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,9 @@ import {
   Dimensions,
   TouchableOpacity,
   StatusBar,
+  Image,
 } from 'react-native';
+import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -23,22 +25,32 @@ import LinearGradient from 'react-native-linear-gradient';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { useProjectStore } from '../../entities/project/store';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
+import { AppBottomNav } from '../../shared/components/AppBottomNav';
+import { AppIcon } from '../../shared/components/AppIcon';
+import { MediaClip, Project } from '../../shared/types';
+import { normalizeMediaUri } from '../../shared/utils/helpers';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface HomeScreenProps {
   onNavigateToEditor: () => void;
   onNavigateToTemplates: () => void;
+  onNavigateToSettings?: () => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onNavigateToEditor,
   onNavigateToTemplates,
+  onNavigateToSettings,
 }) => {
-  const { colors, gradients, isDark } = useTheme();
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { projects } = useProjectStore();
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const { projects, setCurrentProject } = useProjectStore();
+
+  const handleProjectPress = (project: Project) => {
+    setCurrentProject(project);
+    onNavigateToEditor();
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -48,8 +60,17 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <Text style={[styles.logo, { color: colors.textPrimary }]}>
           MotionWeave
         </Text>
-        <TouchableOpacity style={styles.settingsButton}>
-          <Text style={{ color: colors.textPrimary }}>⚙️</Text>
+        <TouchableOpacity
+          style={styles.settingsButton}
+          onPress={onNavigateToSettings}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+        >
+          <AppIcon
+            name="settings-outline"
+            size={22}
+            color={colors.textPrimary}
+          />
         </TouchableOpacity>
       </View>
 
@@ -59,9 +80,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         contentContainerStyle={styles.contentContainer}
       >
         {projects.length === 0 ? (
-          <EmptyState onCreateProject={onNavigateToEditor} />
+          <EmptyState />
         ) : (
-          <ProjectsGrid projects={projects} viewMode={viewMode} />
+          <ProjectsGrid projects={projects} onProjectPress={handleProjectPress} />
         )}
       </ScrollView>
 
@@ -69,17 +90,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       <FAB onPress={onNavigateToEditor} />
 
       {/* Bottom Navigation */}
-      <BottomNav
-        onNavigateToTemplates={onNavigateToTemplates}
-        colors={colors}
+      <AppBottomNav
+        activeTab="home"
+        onSelectTab={tab => {
+          if (tab === 'templates') onNavigateToTemplates();
+          if (tab === 'settings') onNavigateToSettings?.();
+        }}
       />
     </View>
   );
 };
 
-const EmptyState: React.FC<{ onCreateProject: () => void }> = ({
-  onCreateProject,
-}) => {
+const EmptyState: React.FC = () => {
   const { colors } = useTheme();
 
   return (
@@ -95,25 +117,89 @@ const EmptyState: React.FC<{ onCreateProject: () => void }> = ({
 };
 
 const ProjectsGrid: React.FC<{
-  projects: any[];
-  viewMode: 'grid' | 'list';
-}> = ({ projects, viewMode }) => {
+  projects: Project[];
+  onProjectPress: (project: Project) => void;
+}> = ({ projects, onProjectPress }) => {
   return (
     <View style={styles.projectsGrid}>
-      {projects.map((project, index) => (
-        <ProjectCard key={project.id} project={project} index={index} />
+      {projects.map(project => (
+        <ProjectCard
+          key={project.id}
+          project={project}
+          onPress={() => onProjectPress(project)}
+        />
       ))}
     </View>
   );
 };
 
-const ProjectCard: React.FC<{ project: any; index: number }> = ({
+const ProjectPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => {
+  const { colors } = useTheme();
+
+  if (!clip) {
+    return (
+      <View
+        style={[styles.projectThumbnail, { backgroundColor: colors.border }]}
+      >
+        <AppIcon name="videocam-outline" size={22} color={colors.textSecondary} />
+      </View>
+    );
+  }
+
+  const thumbnailUri = clip.thumbnailUri ? normalizeMediaUri(clip.thumbnailUri) : null;
+  const mediaUri = normalizeMediaUri(clip.localUri);
+
+  if (!mediaUri) {
+    return (
+      <View
+        style={[styles.projectThumbnail, { backgroundColor: colors.border }]}
+      >
+        <AppIcon name="image-outline" size={22} color={colors.textSecondary} />
+      </View>
+    );
+  }
+
+  const showThumbnailImage =
+    clip.type === 'video' && !!thumbnailUri && clip.thumbnailUri !== clip.localUri;
+
+  return (
+    <View style={[styles.projectThumbnail, { backgroundColor: colors.border }]}>
+      {clip.type === 'video' ? (
+        showThumbnailImage ? (
+          <Image
+            source={{ uri: thumbnailUri as string }}
+            style={styles.projectThumbnailImage}
+            resizeMode="cover"
+          />
+        ) : (
+        <Video
+          source={{ uri: mediaUri }}
+          style={styles.projectThumbnailImage}
+          resizeMode="cover"
+          paused={true}
+          repeat={false}
+          muted={true}
+          pointerEvents="none"
+        />
+        )
+      ) : (
+        <Image
+          source={{ uri: thumbnailUri || mediaUri }}
+          style={styles.projectThumbnailImage}
+          resizeMode="cover"
+        />
+      )}
+    </View>
+  );
+};
+
+const ProjectCard: React.FC<{ project: Project; onPress: () => void }> = ({
   project,
-  index,
+  onPress,
 }) => {
   const { colors } = useTheme();
   const scale = useSharedValue(1);
-  const translateY = useSharedValue(0);
+  const firstClip = project.videos[0] ?? null;
 
   const tapGesture = Gesture.Tap()
     .onStart(() => {
@@ -121,10 +207,11 @@ const ProjectCard: React.FC<{ project: any; index: number }> = ({
     })
     .onEnd(() => {
       scale.value = withSpring(1);
+      runOnJS(onPress)();
     });
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }, { translateY: translateY.value }],
+    transform: [{ scale: scale.value }],
   }));
 
   return (
@@ -136,14 +223,7 @@ const ProjectCard: React.FC<{ project: any; index: number }> = ({
           animatedStyle,
         ]}
       >
-        <View
-          style={[styles.projectThumbnail, { backgroundColor: colors.border }]}
-        >
-          <Text style={{ color: colors.textSecondary }}>📹</Text>
-        </View>
-        <Text style={[styles.projectName, { color: colors.textPrimary }]}>
-          {project.name}
-        </Text>
+        <ProjectPreview clip={firstClip} />
       </Animated.View>
     </GestureDetector>
   );
@@ -163,7 +243,7 @@ const FAB: React.FC<{ onPress: () => void }> = ({ onPress }) => {
       -1,
       true,
     );
-  }, []);
+  }, [rotation]);
 
   const tapGesture = Gesture.Tap()
     .onStart(() => {
@@ -191,25 +271,6 @@ const FAB: React.FC<{ onPress: () => void }> = ({ onPress }) => {
         </LinearGradient>
       </Animated.View>
     </GestureDetector>
-  );
-};
-
-const BottomNav: React.FC<{
-  onNavigateToTemplates: () => void;
-  colors: any;
-}> = ({ onNavigateToTemplates, colors }) => {
-  return (
-    <View style={[styles.bottomNav, { backgroundColor: colors.surface }]}>
-      <TouchableOpacity style={styles.navItem}>
-        <Text style={{ fontSize: 24 }}>🏠</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.navItem} onPress={onNavigateToTemplates}>
-        <Text style={{ fontSize: 24 }}>📐</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={styles.navItem}>
-        <Text style={{ fontSize: 24 }}>⚙️</Text>
-      </TouchableOpacity>
-    </View>
   );
 };
 
@@ -257,7 +318,8 @@ const styles = StyleSheet.create({
   projectCard: {
     width: (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.md) / 2,
     borderRadius: 12,
-    padding: SPACING.md,
+    padding: 0,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -267,13 +329,14 @@ const styles = StyleSheet.create({
   projectThumbnail: {
     width: '100%',
     aspectRatio: 1,
-    borderRadius: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: SPACING.sm,
   },
-  projectName: {
-    ...TYPOGRAPHY.caption,
+  projectThumbnailImage: {
+    width: '100%',
+    height: '100%',
   },
   fab: {
     position: 'absolute',
@@ -299,16 +362,5 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: '#FFFFFF',
     fontWeight: '300',
-  },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: SPACING.md,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.1)',
-  },
-  navItem: {
-    padding: SPACING.sm,
   },
 });

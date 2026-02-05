@@ -48,6 +48,9 @@ export class VideoImportService {
         selectionLimit: maxItems,
         quality: 1,
         includeBase64: false,
+        includeExtra: true,
+        assetRepresentationMode: 'compatible',
+        formatAsMp4: true,
       });
 
       if (result.didCancel || !result.assets) {
@@ -78,6 +81,9 @@ export class VideoImportService {
         mediaType: 'video',
         selectionLimit: maxVideos,
         quality: 1,
+        includeExtra: true,
+        assetRepresentationMode: 'compatible',
+        formatAsMp4: true,
       });
 
       if (result.didCancel || !result.assets) {
@@ -108,10 +114,16 @@ export class VideoImportService {
     try {
       if (!asset.uri) return null;
 
+      const sourceUri = asset.uri;
       const isVideo = asset.type?.startsWith('video/') ?? false;
       const mediaType: MediaType = isVideo ? 'video' : 'image';
       const mediaId = generateId();
-      const extension = asset.fileName?.split('.').pop() || (isVideo ? 'mp4' : 'jpg');
+      const isIosLibraryAsset =
+        sourceUri.startsWith('ph://') || sourceUri.startsWith('assets-library://');
+      const extension =
+        !isVideo && isIosLibraryAsset
+          ? 'jpg'
+          : asset.fileName?.split('.').pop() || (isVideo ? 'mp4' : 'jpg');
       const fileName = `${mediaId}.${extension}`;
       const localPath = `${this.VIDEO_DIR}/${fileName}`;
 
@@ -121,36 +133,59 @@ export class VideoImportService {
         await RNFS.mkdir(this.VIDEO_DIR, { NSURLIsExcludedFromBackupKey: true });
       }
 
-      // For iOS Photo Library assets, use the original ph:// URI directly
-      // This avoids the need to copy files and works better with the iOS Photo Library
-      let finalPath: string;
-      
-      if (asset.uri.startsWith('ph://')) {
-        // Use the original Photo Library URI
-        finalPath = asset.uri;
-        console.log('Using Photo Library URI:', finalPath);
+      let finalPath = localPath;
+
+      if (isIosLibraryAsset) {
+        if (isVideo) {
+          await RNFS.copyAssetsVideoIOS(sourceUri, localPath);
+        } else {
+          await RNFS.copyAssetsFileIOS(sourceUri, localPath, 0, 0, 1, 1, 'contain');
+        }
+      } else if (sourceUri.startsWith('content://')) {
+        // Android content URIs can't be copied via RNFS without additional tooling.
+        // Use the content URI directly for playback/preview.
+        finalPath = sourceUri;
       } else {
-        // For file system URIs, copy to app directory
-        await RNFS.copyFile(asset.uri, localPath);
-        finalPath = localPath;
+        const sourcePath = sourceUri.startsWith('file://')
+          ? sourceUri.replace('file://', '')
+          : sourceUri;
+        await RNFS.copyFile(sourcePath, localPath);
       }
 
-      // Get file stats (only for copied files)
-      let fileSize = 0;
-      if (!asset.uri.startsWith('ph://')) {
-        const stats = await RNFS.stat(finalPath);
-        fileSize = typeof stats.size === 'string' ? parseInt(stats.size) : stats.size;
-      } else if (asset.fileSize) {
-        fileSize = asset.fileSize;
+      const finalUri =
+        finalPath.startsWith('ph://') ||
+        finalPath.startsWith('assets-library://') ||
+        finalPath.startsWith('content://') ||
+        finalPath.startsWith('http://') ||
+        finalPath.startsWith('https://') ||
+        finalPath.startsWith('file://')
+          ? finalPath
+          : `file://${finalPath}`;
+
+      // Get file stats (best-effort)
+      let fileSize = asset.fileSize || 0;
+      try {
+        if (
+          !finalPath.startsWith('ph://') &&
+          !finalPath.startsWith('assets-library://') &&
+          !finalPath.startsWith('content://') &&
+          !finalPath.startsWith('http://') &&
+          !finalPath.startsWith('https://')
+        ) {
+          const stats = await RNFS.stat(finalPath);
+          fileSize = typeof stats.size === 'string' ? parseInt(stats.size, 10) : stats.size;
+        }
+      } catch {
+        // Keep fallback size
       }
-      
-      // Create thumbnail path (same as final path - iOS can display video frames and images)
-      const thumbnailPath = finalPath;
+
+      // Thumbnail path: for now we reuse the media URI (video previews render first frame).
+      const thumbnailPath = finalUri;
 
       return {
         id: mediaId,
-        uri: asset.uri,
-        localPath: finalPath,
+        uri: sourceUri,
+        localPath: finalUri,
         thumbnailPath,
         type: mediaType,
         duration: asset.duration || 0,
@@ -170,9 +205,12 @@ export class VideoImportService {
 
   static async deleteMedia(localPath: string): Promise<void> {
     try {
-      const exists = await RNFS.exists(localPath);
+      const fsPath = localPath.startsWith('file://')
+        ? localPath.replace('file://', '')
+        : localPath;
+      const exists = await RNFS.exists(fsPath);
       if (exists) {
-        await RNFS.unlink(localPath);
+        await RNFS.unlink(fsPath);
       }
     } catch (error) {
       console.error('Failed to delete media:', error);
@@ -181,8 +219,13 @@ export class VideoImportService {
 
   static async getMediaSize(localPath: string): Promise<number> {
     try {
-      const stats = await RNFS.stat(localPath);
-      return typeof stats.size === 'string' ? parseInt(stats.size) : stats.size;
+      const fsPath = localPath.startsWith('file://')
+        ? localPath.replace('file://', '')
+        : localPath;
+      const stats = await RNFS.stat(fsPath);
+      return typeof stats.size === 'string'
+        ? parseInt(stats.size, 10)
+        : stats.size;
     } catch (error) {
       console.error('Failed to get media size:', error);
       return 0;

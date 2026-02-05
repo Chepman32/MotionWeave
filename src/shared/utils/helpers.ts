@@ -25,7 +25,7 @@ export const debounce = <T extends (...args: any[]) => any>(
   func: T,
   wait: number,
 ): ((...args: Parameters<T>) => void) => {
-  let timeout: NodeJS.Timeout | null = null;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
 
   return (...args: Parameters<T>) => {
     if (timeout) clearTimeout(timeout);
@@ -35,4 +35,20 @@ export const debounce = <T extends (...args: any[]) => any>(
 
 export const clamp = (value: number, min: number, max: number): number => {
   return Math.min(Math.max(value, min), max);
+};
+
+export const normalizeMediaUri = (pathOrUri: string): string => {
+  if (!pathOrUri) return pathOrUri;
+
+  // Keep existing URI schemes (file://, content://, ph://, http(s)://, asset:/, etc).
+  if (/^[a-z][a-z0-9+.-]*:/i.test(pathOrUri)) {
+    return pathOrUri;
+  }
+
+  // Absolute local file paths should be converted to file:// URIs for RN components.
+  if (pathOrUri.startsWith('/')) {
+    return `file://${pathOrUri}`;
+  }
+
+  return pathOrUri;
 };

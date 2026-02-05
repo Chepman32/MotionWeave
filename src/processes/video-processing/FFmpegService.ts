@@ -45,10 +45,10 @@ export class FFmpegService {
   }
 
   static async composeVideo(
-    clips: MediaClip[],
-    layout: LayoutConfig,
-    options: ExportOptions,
-    onProgress?: (progress: ExportProgress) => void,
+    _clips: MediaClip[],
+    _layout: LayoutConfig,
+    _options: ExportOptions,
+    _onProgress?: (progress: ExportProgress) => void,
   ): Promise<string> {
     console.warn('[FFmpegService] Video composition is not available. FFmpeg-kit has been deprecated.');
     throw new Error(
@@ -58,8 +58,8 @@ export class FFmpegService {
   }
 
   static async generateThumbnail(
-    videoPath: string,
-    time: number = 0,
+    _videoPath: string,
+    _time: number = 0,
   ): Promise<string> {
     console.warn('[FFmpegService] Thumbnail generation is not available. FFmpeg-kit has been deprecated.');
     throw new Error(
@@ -69,9 +69,9 @@ export class FFmpegService {
   }
 
   static async trimVideo(
-    inputPath: string,
-    startTime: number,
-    endTime: number,
+    _inputPath: string,
+    _startTime: number,
+    _endTime: number,
   ): Promise<string> {
     console.warn('[FFmpegService] Video trimming is not available. FFmpeg-kit has been deprecated.');
     throw new Error(
@@ -122,7 +122,7 @@ export class FFmpegService {
     const cellHeight = Math.floor(resolution.height / rows);
 
     // Input files
-    const inputs = clips.map((clip, i) => `-i "${clip.localUri}"`).join(' ');
+    const inputs = clips.map(clip => `-i "${clip.localUri}"`).join(' ');
 
     // Build filter complex for grid layout
     const filterParts: string[] = [];

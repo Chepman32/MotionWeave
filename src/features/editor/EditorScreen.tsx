@@ -17,9 +17,9 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
-import { MediaClip, LayoutConfig } from '../../shared/types';
+import { LayoutConfig } from '../../shared/types';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface EditorScreenProps {
   onBack: () => void;
@@ -124,8 +124,6 @@ const EditorCanvas: React.FC<{
   selectedCell: number | null;
   onSelectCell: (cell: number) => void;
 }> = ({ layout, selectedCell, onSelectCell }) => {
-  const { colors } = useTheme();
-
   if (layout.type === 'grid' && layout.rows && layout.cols) {
     const cells = [];
     const cellCount = layout.rows * layout.cols;
@@ -134,10 +132,8 @@ const EditorCanvas: React.FC<{
       cells.push(
         <GridCell
           key={i}
-          index={i}
           isSelected={selectedCell === i}
           onSelect={() => onSelectCell(i)}
-          spacing={layout.spacing}
           borderRadius={layout.borderRadius}
         />,
       );
@@ -161,7 +157,6 @@ const EditorCanvas: React.FC<{
           style={[
             styles.gridContainer,
             {
-              gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
               gap: layout.spacing,
             },
           ]}
@@ -176,12 +171,10 @@ const EditorCanvas: React.FC<{
 };
 
 const GridCell: React.FC<{
-  index: number;
   isSelected: boolean;
   onSelect: () => void;
-  spacing: number;
   borderRadius: number;
-}> = ({ index, isSelected, onSelect, spacing, borderRadius }) => {
+}> = ({ isSelected, onSelect, borderRadius }) => {
   const { colors } = useTheme();
   const scale = useSharedValue(1);
 

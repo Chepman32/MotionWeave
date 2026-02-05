@@ -10,7 +10,7 @@ describe('Project Utils', () => {
       const project = createNewProject();
 
       expect(project.id).toBeDefined();
-      expect(project.name).toBe('New Project');
+      expect(project.name).toBe('');
       expect(project.videos).toEqual([]);
       expect(project.layout.type).toBe('grid');
       expect(project.layout.rows).toBe(2);
@@ -60,11 +60,11 @@ describe('Project Utils', () => {
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
-    it('should reject project with empty name', () => {
+    it('should not require a project name', () => {
       const project = createNewProject('');
       const result = validateProject(project);
       expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Project name is required');
+      expect(result.errors).not.toContain('Project name is required');
     });
 
     it('should reject project with no videos', () => {

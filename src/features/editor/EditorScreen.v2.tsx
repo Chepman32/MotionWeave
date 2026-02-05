@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   StatusBar,
   Image,
+  Modal,
 } from 'react-native';
 import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,8 +29,13 @@ import { VideoImportService } from '../../processes/video-processing/VideoImport
 import { ExportModal } from '../export/ExportModal';
 import { useProjectStore } from '../../entities/project/store';
 import { createNewProject } from '../../entities/project/utils';
+import { AppIcon } from '../../shared/components/AppIcon';
+import { PreviewScreen } from '../preview/PreviewScreen';
+import { usePreferencesStore } from '../../shared/stores/preferencesStore';
+import { normalizeMediaUri } from '../../shared/utils/helpers';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const AnimatedAppIcon = Animated.createAnimatedComponent(AppIcon);
 
 interface EditorScreenV2Props {
   onBack: () => void;
@@ -50,11 +56,18 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const [project, setProject] = useState<Project | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [isAssetsExpanded, setIsAssetsExpanded] = useState(false);
+  const [timelineZoom, setTimelineZoom] = useState(1);
   const [activeTab, setActiveTab] = useState<
     'layout' | 'effects' | 'audio' | 'export'
   >('layout');
   const [, setIsImporting] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [isPreviewVisible, setIsPreviewVisible] = useState(false);
+  const soundEnabled = usePreferencesStore(state => state.soundEnabled);
+
+  const historyRef = useRef<Project[]>([]);
+  const historyIndexRef = useRef(-1);
+  const [, setHistoryVersion] = useState(0);
 
   const assetsExpandedProgress = useSharedValue(0);
   const assetsChevronStyle = useAnimatedStyle(() => ({
@@ -67,10 +80,16 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     const initializeProject = async () => {
       if (projectId && currentProject) {
         setProject(currentProject);
+        historyRef.current = [currentProject];
+        historyIndexRef.current = 0;
+        setHistoryVersion(v => v + 1);
       } else {
-        const newProject = createNewProject('New Project', layout);
+        const newProject = createNewProject('', layout);
         setProject(newProject);
         setCurrentProject(newProject);
+        historyRef.current = [newProject];
+        historyIndexRef.current = 0;
+        setHistoryVersion(v => v + 1);
       }
     };
 
@@ -125,7 +144,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         updatedAt: Date.now(),
       };
 
-      setProject(updatedProject);
+      commitProject(updatedProject);
       await updateProject(project.id, updatedProject);
     } catch (error) {
       console.error('Failed to pick media:', error);
@@ -145,7 +164,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       updatedAt: Date.now(),
     };
 
-    setProject(updatedProject);
+    commitProject(updatedProject);
     await updateProject(project.id, updatedProject);
     setSelectedClipId(null);
   };
@@ -158,6 +177,14 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     setShowExportModal(true);
   };
 
+  const handleOpenPreview = () => {
+    if (!project || project.videos.length === 0) {
+      Alert.alert('No Media', 'Please add videos or images to preview.');
+      return;
+    }
+    setIsPreviewVisible(true);
+  };
+
   const handleExportComplete = async (outputPath: string) => {
     if (!project) return;
 
@@ -167,7 +194,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       updatedAt: Date.now(),
     };
 
-    setProject(updatedProject);
+    commitProject(updatedProject);
     await updateProject(project.id, updatedProject);
   };
 
@@ -188,6 +215,27 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     }
   };
 
+  const commitProject = useCallback((nextProject: Project) => {
+    setProject(nextProject);
+
+    const nextHistory = historyRef.current.slice(
+      0,
+      historyIndexRef.current + 1,
+    );
+    nextHistory.push(nextProject);
+    historyRef.current = nextHistory;
+    historyIndexRef.current = nextHistory.length - 1;
+    setHistoryVersion(v => v + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!project || !selectedClipId) return;
+    const stillExists = project.videos.some(v => v.id === selectedClipId);
+    if (!stillExists) {
+      setSelectedClipId(null);
+    }
+  }, [project, selectedClipId]);
+
   if (!project) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -205,6 +253,44 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     ? project.videos.find(v => v.id === selectedClipId) || null
     : null;
 
+  const canUndo = historyIndexRef.current > 0;
+  const canRedo =
+    historyIndexRef.current >= 0 &&
+    historyIndexRef.current < historyRef.current.length - 1;
+
+  const handleUndo = async () => {
+    if (!project) return;
+    if (historyIndexRef.current <= 0) return;
+
+    historyIndexRef.current -= 1;
+    const prevProject = historyRef.current[historyIndexRef.current];
+    setProject(prevProject);
+    setHistoryVersion(v => v + 1);
+
+    try {
+      await updateProject(prevProject.id, prevProject);
+    } catch (error) {
+      console.error('Failed to persist undo:', error);
+    }
+  };
+
+  const handleRedo = async () => {
+    if (!project) return;
+    if (historyIndexRef.current < 0) return;
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+
+    historyIndexRef.current += 1;
+    const nextProject = historyRef.current[historyIndexRef.current];
+    setProject(nextProject);
+    setHistoryVersion(v => v + 1);
+
+    try {
+      await updateProject(nextProject.id, nextProject);
+    } catch (error) {
+      console.error('Failed to persist redo:', error);
+    }
+  };
+
   const toggleAssetsExpanded = () => {
     const next = !isAssetsExpanded;
     setIsAssetsExpanded(next);
@@ -214,22 +300,113 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     });
   };
 
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, value));
+
+  const handleTimelineZoomOut = () => {
+    setTimelineZoom(z => clamp(parseFloat((z - 0.2).toFixed(2)), 0.8, 2));
+  };
+
+  const handleTimelineZoomIn = () => {
+    setTimelineZoom(z => clamp(parseFloat((z + 0.2).toFixed(2)), 0.8, 2));
+  };
+
+  const timelineClipWidth = Math.round(60 * timelineZoom);
+  const timelineClipHeight = 40;
+  const timelineContainerHeight = Math.max(
+    100,
+    timelineClipHeight + SPACING.md * 2 + SPACING.sm + 14,
+  );
+
+  const handleBackPress = async () => {
+    if (!project) {
+      onBack();
+      return;
+    }
+
+    try {
+      if (project.videos.length > 0) {
+        await updateProject(project.id, project);
+      }
+    } catch (error) {
+      console.error('Failed to autosave project on exit:', error);
+    } finally {
+      onBack();
+    }
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {/* Top Bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + SPACING.md }]}>
-        <TouchableOpacity onPress={onBack} style={styles.backButton}>
-          <Text style={{ fontSize: 24, color: colors.textPrimary }}>←</Text>
+        <TouchableOpacity onPress={handleBackPress} style={styles.backButton}>
+          <AppIcon
+            name="chevron-back"
+            size={24}
+            color={colors.textPrimary}
+          />
         </TouchableOpacity>
-        <Text style={[styles.projectName, { color: colors.textPrimary }]}>
-          {project.name}
-        </Text>
-        <TouchableOpacity onPress={handleExport} style={styles.exportButton}>
-          <Text style={{ color: colors.primary, fontWeight: '600' }}>
-            Export
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.undoRedoContainer}>
+          <TouchableOpacity
+            onPress={handleUndo}
+            disabled={!canUndo}
+            style={[
+              styles.undoRedoButton,
+              {
+                opacity: canUndo ? 1 : 0.3,
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Undo"
+          >
+            <AppIcon name="arrow-undo" size={18} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={handleRedo}
+            disabled={!canRedo}
+            style={[
+              styles.undoRedoButton,
+              {
+                opacity: canRedo ? 1 : 0.3,
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Redo"
+          >
+            <AppIcon name="arrow-redo" size={18} color={colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.topRightActions}>
+          <TouchableOpacity
+            onPress={handleOpenPreview}
+            style={[
+              styles.previewButton,
+              {
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+                opacity: project.videos.length > 0 ? 1 : 0.4,
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Video Preview"
+          >
+            <AppIcon name="play-circle-outline" size={20} color={colors.primary} />
+            <Text style={[styles.previewButtonText, { color: colors.primary }]}>
+              Preview
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleExport} style={styles.exportButton}>
+            <Text style={{ color: colors.primary, fontWeight: '600' }}>
+              Export
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Assets Area (Accordion) */}
@@ -258,15 +435,12 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
               {isAssetsExpanded ? 'Preview' : 'Grid'}
             </Text>
           </View>
-          <Animated.Text
-            style={[
-              styles.assetsAccordionChevron,
-              assetsChevronStyle,
-              { color: colors.textSecondary },
-            ]}
-          >
-            ▾
-          </Animated.Text>
+          <AnimatedAppIcon
+            name="chevron-down"
+            size={18}
+            color={colors.textSecondary}
+            style={assetsChevronStyle}
+          />
         </TouchableOpacity>
 
         <View style={styles.assetsContent}>
@@ -298,21 +472,61 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         </View>
       </View>
 
-      {/* Remove Button - shown when item selected */}
-      {selectedClipId && selectedClip && (
-        <View style={styles.removeButtonContainer}>
+      {/* Timeline Controls */}
+      <View style={styles.removeButtonContainer}>
+        <View style={styles.timelineControlsRow}>
           <TouchableOpacity
-            onPress={handleRemoveMedia}
-            style={[styles.removeButton, { backgroundColor: colors.error }]}
+            onPress={handleTimelineZoomOut}
+            style={[
+              styles.timelineControlButton,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Timeline zoom out"
           >
-            <Text style={styles.removeButtonIcon}>🗑️</Text>
+            <Text
+              style={[styles.timelineControlIcon, { color: colors.textPrimary }]}
+            >
+              −
+            </Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleTimelineZoomIn}
+            style={[
+              styles.timelineControlButton,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Timeline zoom in"
+          >
+            <Text
+              style={[styles.timelineControlIcon, { color: colors.textPrimary }]}
+            >
+              +
+            </Text>
+          </TouchableOpacity>
+
+          {/* Remove Button - shown when item selected */}
+          {selectedClipId && selectedClip && (
+            <TouchableOpacity
+              onPress={handleRemoveMedia}
+              style={[styles.removeButton, { backgroundColor: colors.error }]}
+              accessibilityRole="button"
+              accessibilityLabel="Remove selected item"
+            >
+              <AppIcon name="trash-outline" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
         </View>
-      )}
+      </View>
 
       {/* Timeline Area */}
       <View
-        style={[styles.timelineContainer, { backgroundColor: colors.surface }]}
+        style={[
+          styles.timelineContainer,
+          { backgroundColor: colors.surface, height: timelineContainerHeight },
+        ]}
       >
         <Text style={[styles.timelineLabel, { color: colors.textSecondary }]}>
           Timeline - {project.videos.length} item(s)
@@ -320,7 +534,14 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {project.videos.map(item => {
             const isSelected = selectedClipId === item.id;
-            const mediaUri = item.localUri;
+            const thumbnailUri = item.thumbnailUri
+              ? normalizeMediaUri(item.thumbnailUri)
+              : null;
+            const localUri = normalizeMediaUri(item.localUri);
+            const showThumbnailImage =
+              item.type === 'video' &&
+              !!thumbnailUri &&
+              item.thumbnailUri !== item.localUri;
             
             return (
               <TouchableOpacity
@@ -332,27 +553,37 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
                     backgroundColor: colors.border,
                     borderWidth: isSelected ? 2 : 0,
                     borderColor: colors.primary,
+                    width: timelineClipWidth,
+                    height: timelineClipHeight,
                   }
                 ]}
               >
-                {item.type === 'video' && mediaUri ? (
+                {item.type === 'video' && showThumbnailImage ? (
+                  <Image
+                    source={{ uri: thumbnailUri! }}
+                    style={styles.timelineThumbnail}
+                    resizeMode="cover"
+                  />
+                ) : item.type === 'video' && localUri ? (
                   <Video
-                    source={{ uri: mediaUri }}
+                    source={{ uri: localUri }}
                     style={styles.timelineThumbnail}
                     resizeMode="cover"
                     paused={true}
                     repeat={false}
                   />
-                ) : item.type === 'image' && mediaUri ? (
+                ) : item.type === 'image' && (thumbnailUri || localUri) ? (
                   <Image
-                    source={{ uri: mediaUri }}
+                    source={{ uri: thumbnailUri || localUri }}
                     style={styles.timelineThumbnail}
                     resizeMode="cover"
                   />
                 ) : (
-                  <Text style={{ fontSize: 10, color: colors.textPrimary }}>
-                    {item.type === 'video' ? '🎬' : '🖼️'}
-                  </Text>
+                  <AppIcon
+                    name={item.type === 'video' ? 'film-outline' : 'image-outline'}
+                    size={16}
+                    color={colors.textSecondary}
+                  />
                 )}
               </TouchableOpacity>
             );
@@ -387,7 +618,11 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
           ))}
         </View>
         <View style={styles.toolsContent}>
-          <ToolsContent activeTab={activeTab} onSave={handleSave} />
+          <ToolsContent
+            activeTab={activeTab}
+            onSave={handleSave}
+            onPreview={handleOpenPreview}
+          />
         </View>
       </View>
 
@@ -398,6 +633,23 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         project={project}
         onExportComplete={handleExportComplete}
       />
+
+      <Modal
+        visible={isPreviewVisible}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setIsPreviewVisible(false)}
+      >
+        <PreviewScreen
+          project={project}
+          onBack={() => setIsPreviewVisible(false)}
+          onExport={() => {
+            setIsPreviewVisible(false);
+            handleExport();
+          }}
+          soundEnabled={soundEnabled}
+        />
+      </Modal>
     </View>
   );
 };
@@ -495,7 +747,14 @@ const GridCell: React.FC<{
     transform: [{ scale: scale.value }],
   }));
 
-  const mediaUri = media?.localUri;
+  const localUri = media?.localUri ? normalizeMediaUri(media.localUri) : null;
+  const thumbnailUri = media?.thumbnailUri
+    ? normalizeMediaUri(media.thumbnailUri)
+    : null;
+  const showThumbnailImage =
+    media?.type === 'video' &&
+    !!thumbnailUri &&
+    media.thumbnailUri !== media.localUri;
 
   return (
     <GestureDetector gesture={tapGesture}>
@@ -512,24 +771,32 @@ const GridCell: React.FC<{
           animatedStyle,
         ]}
       >
-        {media?.type === 'video' && mediaUri ? (
+        {media?.type === 'video' && showThumbnailImage ? (
+          <Image
+            source={{ uri: thumbnailUri! }}
+            style={[styles.cellThumbnail, { borderRadius }]}
+            resizeMode="cover"
+          />
+        ) : media?.type === 'video' && localUri ? (
           <Video
-            source={{ uri: mediaUri }}
+            source={{ uri: localUri }}
             style={[styles.cellThumbnail, { borderRadius }]}
             resizeMode="cover"
             paused={true}
             repeat={false}
           />
-        ) : media?.type === 'image' && mediaUri ? (
+        ) : media?.type === 'image' && (thumbnailUri || localUri) ? (
           <Image
-            source={{ uri: mediaUri }}
+            source={{ uri: (thumbnailUri || localUri)! }}
             style={[styles.cellThumbnail, { borderRadius }]}
             resizeMode="cover"
           />
         ) : media ? (
-          <Text style={{ fontSize: 32 }}>
-            {media.type === 'video' ? '🎬' : '🖼️'}
-          </Text>
+          <AppIcon
+            name={media.type === 'video' ? 'film-outline' : 'image-outline'}
+            size={28}
+            color={colors.textSecondary}
+          />
         ) : (
           <Text style={{ fontSize: 32, opacity: 0.5 }}>+</Text>
         )}
@@ -540,24 +807,41 @@ const GridCell: React.FC<{
 
 const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => {
   const { colors } = useTheme();
+  const soundEnabled = usePreferencesStore(state => state.soundEnabled);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  useEffect(() => {
+    setIsPlaying(false);
+  }, [clip?.id]);
 
   return (
-    <View
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={() => {
+        if (clip?.type === 'video') {
+          setIsPlaying(p => !p);
+        }
+      }}
       style={[styles.previewContainer, { backgroundColor: '#000000' }]}
+      accessibilityRole={clip?.type === 'video' ? 'button' : undefined}
+      accessibilityLabel={
+        clip?.type === 'video' ? 'Play or pause preview' : undefined
+      }
     >
       {clip ? (
         <>
           {clip.type === 'video' ? (
             <Video
-              source={{ uri: clip.localUri }}
+              source={{ uri: normalizeMediaUri(clip.localUri) }}
               style={styles.previewMedia}
               resizeMode="contain"
-              paused={true}
-              repeat={false}
+              paused={!isPlaying}
+              repeat={true}
+              muted={!soundEnabled}
             />
           ) : (
             <Image
-              source={{ uri: clip.localUri }}
+              source={{ uri: normalizeMediaUri(clip.localUri) }}
               style={styles.previewMedia}
               resizeMode="contain"
             />
@@ -565,6 +849,17 @@ const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => 
           {clip.type === 'video' && (
             <View style={styles.previewVideoBadge}>
               <Text style={styles.previewVideoBadgeText}>VIDEO</Text>
+            </View>
+          )}
+          {clip.type === 'video' && (
+            <View style={styles.previewPlayOverlay} pointerEvents="none">
+              <View style={styles.previewPlayButton}>
+                <AppIcon
+                  name={isPlaying ? 'pause' : 'play'}
+                  size={20}
+                  color="#FFFFFF"
+                />
+              </View>
             </View>
           )}
         </>
@@ -577,14 +872,15 @@ const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => 
           </Text>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 };
 
-const ToolsContent: React.FC<{ activeTab: string; onSave: () => void }> = ({
-  activeTab,
-  onSave,
-}) => {
+const ToolsContent: React.FC<{
+  activeTab: string;
+  onSave: () => void;
+  onPreview: () => void;
+}> = ({ activeTab, onSave, onPreview }) => {
   const { colors } = useTheme();
 
   if (activeTab === 'export') {
@@ -593,6 +889,20 @@ const ToolsContent: React.FC<{ activeTab: string; onSave: () => void }> = ({
         <Text style={[styles.toolsText, { color: colors.textSecondary }]}>
           Ready to export your video collage
         </Text>
+        <TouchableOpacity
+          onPress={onPreview}
+          style={[
+            styles.previewActionButton,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Video Preview"
+        >
+          <AppIcon name="play-circle-outline" size={20} color={colors.primary} />
+          <Text style={[styles.previewActionText, { color: colors.primary }]}>
+            Video Preview
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={onSave}
           style={[styles.saveButton, { backgroundColor: colors.primary }]}
@@ -634,6 +944,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
   },
+  topRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  previewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  previewButtonText: {
+    ...TYPOGRAPHY.caption,
+    fontWeight: '700',
+  },
+  undoRedoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  undoRedoButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  undoRedoIcon: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
   assetsContainer: {
     flex: 1,
     paddingHorizontal: SPACING.lg,
@@ -648,6 +993,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     borderRadius: 12,
     borderWidth: 1,
+    zIndex: 2,
   },
   assetsAccordionHeaderLeft: {
     flexDirection: 'row',
@@ -661,19 +1007,21 @@ const styles = StyleSheet.create({
   assetsAccordionSubtitle: {
     ...TYPOGRAPHY.small,
   },
-  assetsAccordionChevron: {
-    fontSize: 18,
-  },
+  assetsAccordionChevron: {},
   assetsContent: {
     flex: 1,
     marginTop: SPACING.md,
-    justifyContent: 'center',
+    minHeight: 0,
+    justifyContent: 'flex-start',
     alignItems: 'center',
+    overflow: 'hidden',
+    zIndex: 1,
   },
   assetsContentInner: {
     flex: 1,
     width: '100%',
-    justifyContent: 'center',
+    minHeight: 0,
+    justifyContent: 'flex-start',
     alignItems: 'center',
   },
   canvas: {
@@ -700,9 +1048,28 @@ const styles = StyleSheet.create({
   removeButtonContainer: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
     backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  timelineControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  timelineControlButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timelineControlIcon: {
+    fontSize: 20,
+    fontWeight: '700',
+    lineHeight: 20,
   },
   removeButton: {
     width: 40,
@@ -711,9 +1078,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  removeButtonIcon: {
-    fontSize: 20,
-  },
+  removeButtonIcon: {},
   timelineContainer: {
     height: 100,
     paddingHorizontal: SPACING.lg,
@@ -749,6 +1114,7 @@ const styles = StyleSheet.create({
   previewMedia: {
     width: '100%',
     height: '100%',
+    backgroundColor: '#000000',
   },
   previewPlaceholder: {
     flex: 1,
@@ -776,6 +1142,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  previewPlayOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewPlayButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   toolsDrawer: {
     height: 200,
@@ -816,6 +1199,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.xl,
     paddingVertical: SPACING.md,
     borderRadius: 12,
+  },
+  previewActionButton: {
+    marginTop: SPACING.lg,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  previewActionText: {
+    ...TYPOGRAPHY.body,
+    fontWeight: '700',
   },
   saveButtonText: {
     color: '#FFFFFF',

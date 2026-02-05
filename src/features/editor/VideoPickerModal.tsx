@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -30,14 +30,7 @@ export const VideoPickerModal: React.FC<VideoPickerModalProps> = ({
   const { colors } = useTheme();
   const [isLoading, setIsLoading] = useState(false);
 
-  // Auto-open picker when modal becomes visible
-  useEffect(() => {
-    if (isVisible && !isLoading) {
-      handlePickMedia();
-    }
-  }, [isVisible]);
-
-  const handlePickMedia = async () => {
+  const handlePickMedia = useCallback(async () => {
     try {
       setIsLoading(true);
       const media = await VideoImportService.pickMedia(maxItems);
@@ -53,7 +46,14 @@ export const VideoPickerModal: React.FC<VideoPickerModalProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [maxItems, onClose, onMediaSelected]);
+
+  // Auto-open picker when modal becomes visible
+  useEffect(() => {
+    if (isVisible && !isLoading) {
+      handlePickMedia();
+    }
+  }, [handlePickMedia, isLoading, isVisible]);
 
   return (
     <BottomSheet isVisible={isVisible} onClose={onClose}>

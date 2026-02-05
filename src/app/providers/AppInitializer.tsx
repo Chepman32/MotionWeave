@@ -2,6 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useTheme } from '../../shared/hooks/useTheme';
 import RNFS from 'react-native-fs';
+import { AppIcon, loadAppIconFont } from '../../shared/components/AppIcon';
+import { useThemeStore } from '../../shared/stores/themeStore';
+import { usePreferencesStore } from '../../shared/stores/preferencesStore';
 
 interface AppInitializerProps {
   children: React.ReactNode;
@@ -16,14 +19,19 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const { colors } = useTheme();
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isInitializedRef = useRef(false);
+
+  useEffect(() => {
+    isInitializedRef.current = isInitialized;
+  }, [isInitialized]);
 
   useEffect(() => {
     initializeApp();
     
     // Set a timeout to prevent infinite loading
     timeoutRef.current = setTimeout(() => {
-      if (!isInitialized) {
-        console.warn('⚠️ Initialization timeout - forcing continue');
+      if (!isInitializedRef.current) {
+        console.warn('Initialization timeout - forcing continue');
         setIsInitialized(true);
         setIsLoading(false);
       }
@@ -60,8 +68,24 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
 
   const initializeApp = async () => {
     try {
-      console.log('🚀 Initializing MotionWeave...');
+      console.log('Initializing MotionWeave...');
       setIsLoading(true);
+
+      // Ensure icon font is loaded early to avoid "?" glyphs.
+      await loadAppIconFont();
+
+      // Hydrate user preferences (theme, toggles)
+      try {
+        await useThemeStore.getState().hydrate();
+      } catch (themeError) {
+        console.warn('Theme hydration failed:', themeError);
+      }
+
+      try {
+        await usePreferencesStore.getState().hydrate();
+      } catch (prefsError) {
+        console.warn('Preferences hydration failed:', prefsError);
+      }
 
       // Initialize services one by one with error handling
       // Database
@@ -72,7 +96,7 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         await DatabaseService.initialize();
         console.log('✓ Database initialized');
       } catch (dbError) {
-        console.warn('⚠️ Database initialization failed:', dbError);
+        console.warn('Database initialization failed:', dbError);
         // Don't fail - app can work without database
       }
 
@@ -84,7 +108,7 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         await VideoImportService.initialize();
         console.log('✓ Video import service initialized');
       } catch (importError) {
-        console.warn('⚠️ Video import initialization failed:', importError);
+        console.warn('Video import initialization failed:', importError);
       }
 
       // FFmpeg Service
@@ -95,7 +119,7 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         await FFmpegService.initialize();
         console.log('✓ FFmpeg service initialized');
       } catch (ffmpegError) {
-        console.warn('⚠️ FFmpeg initialization failed:', ffmpegError);
+        console.warn('FFmpeg initialization failed:', ffmpegError);
       }
 
       // Purchase Service
@@ -106,7 +130,7 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         await PurchaseService.initialize();
         console.log('✓ Purchase service initialized');
       } catch (iapError) {
-        console.warn('⚠️ IAP initialization failed:', iapError);
+        console.warn('IAP initialization failed:', iapError);
       }
 
       // Load projects
@@ -117,10 +141,10 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         await useProjectStore.getState().loadProjects();
         console.log('✓ Projects loaded');
       } catch (projectError) {
-        console.warn('⚠️ Project loading failed:', projectError);
+        console.warn('Project loading failed:', projectError);
       }
 
-      console.log('✅ App initialization complete');
+      console.log('App initialization complete');
       setIsInitialized(true);
       setIsLoading(false);
       
@@ -143,9 +167,12 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
   if (error) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <Text style={[styles.errorText, { color: colors.error }]}>
-          ⚠️ Initialization Issue
-        </Text>
+        <View style={styles.errorHeader}>
+          <AppIcon name="warning-outline" size={22} color={colors.error} />
+          <Text style={[styles.errorText, { color: colors.error }]}>
+            Initialization Issue
+          </Text>
+        </View>
         <Text style={[styles.errorDetail, { color: colors.textSecondary }]}>
           {error}
         </Text>
@@ -183,6 +210,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
+  errorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
   loadingText: {
     marginTop: 16,
     fontSize: 18,
@@ -195,7 +228,6 @@ const styles = StyleSheet.create({
   errorText: {
     fontSize: 20,
     fontWeight: '600',
-    marginBottom: 8,
   },
   errorDetail: {
     fontSize: 14,

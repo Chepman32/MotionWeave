@@ -49,13 +49,8 @@ export class PhotoLibraryService {
   }
 
   static async checkPermission(): Promise<boolean> {
-    try {
-      // On iOS, permission is requested automatically when saving
-      return true;
-    } catch (error) {
-      console.error('Failed to check permission:', error);
-      return false;
-    }
+    // On iOS, permission is requested automatically when saving
+    return true;
   }
 
   static async getRecentVideos(count: number = 20): Promise<any[]> {

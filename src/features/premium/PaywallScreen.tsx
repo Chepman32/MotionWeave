@@ -14,7 +14,6 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withSequence,
   withDelay,
   runOnJS,
 } from 'react-native-reanimated';
@@ -27,6 +26,7 @@ import {
   PurchaseService,
   SubscriptionPlan,
 } from '../../processes/iap/PurchaseService';
+import { AppIcon, AppIconName } from '../../shared/components/AppIcon';
 
 interface PaywallScreenProps {
   onClose: () => void;
@@ -36,35 +36,51 @@ interface PaywallScreenProps {
 
 const PREMIUM_FEATURES = [
   {
-    icon: '🎨',
+    iconName: 'color-palette-outline' as AppIconName,
     title: 'All Premium Templates',
     description: '20+ exclusive layouts',
   },
   {
-    icon: '🎬',
+    iconName: 'film-outline' as AppIconName,
     title: 'Advanced Filters',
     description: '15+ professional filters',
   },
   {
-    icon: '✍️',
+    iconName: 'text-outline' as AppIconName,
     title: 'Text Overlays',
     description: 'Custom fonts & animations',
   },
-  { icon: '4️⃣', title: '4K Export', description: 'Ultra HD quality' },
   {
-    icon: '🎵',
+    iconName: 'tv-outline' as AppIconName,
+    title: '4K Export',
+    description: 'Ultra HD quality',
+  },
+  {
+    iconName: 'musical-notes-outline' as AppIconName,
     title: 'Background Music',
     description: '50+ royalty-free tracks',
   },
-  { icon: '⚡', title: 'Priority Export', description: 'Faster processing' },
-  { icon: '🚫', title: 'No Watermark', description: 'Clean exports' },
-  { icon: '☁️', title: 'Cloud Backup', description: 'Sync across devices' },
+  {
+    iconName: 'flash-outline' as AppIconName,
+    title: 'Priority Export',
+    description: 'Faster processing',
+  },
+  {
+    iconName: 'ban-outline' as AppIconName,
+    title: 'No Watermark',
+    description: 'Clean exports',
+  },
+  {
+    iconName: 'cloud-outline' as AppIconName,
+    title: 'Cloud Backup',
+    description: 'Sync across devices',
+  },
 ];
 
 export const PaywallScreen: React.FC<PaywallScreenProps> = ({
   onClose,
   onPurchaseComplete,
-  feature,
+  feature: _feature,
 }) => {
   const { colors, gradients, isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -118,7 +134,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
   const handleRestore = async () => {
     try {
       setIsPurchasing(true);
-      const customerInfo = await PurchaseService.restorePurchases();
+      await PurchaseService.restorePurchases();
       const isPremium = await PurchaseService.isPremium();
 
       if (isPremium) {
@@ -128,7 +144,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
       } else {
         Alert.alert('No Purchases Found', 'No previous purchases were found.');
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Restore Failed', 'Failed to restore purchases.');
     } finally {
       setIsPurchasing(false);
@@ -142,8 +158,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
         colors={gradients.primary}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.headerGradient}
-        opacity={0.1}
+        style={[styles.headerGradient, { opacity: 0.1 }]}
       />
 
       {/* Close Button */}
@@ -164,10 +179,10 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
 
         {/* Features */}
         <View style={styles.features}>
-          {PREMIUM_FEATURES.map((feature, index) => (
+          {PREMIUM_FEATURES.map((premiumFeature, index) => (
             <FeatureItem
               key={index}
-              feature={feature}
+              feature={premiumFeature}
               index={index}
               colors={colors}
             />
@@ -224,7 +239,7 @@ export const PaywallScreen: React.FC<PaywallScreenProps> = ({
 };
 
 const FeatureItem: React.FC<{
-  feature: { icon: string; title: string; description: string };
+  feature: { iconName: AppIconName; title: string; description: string };
   index: number;
   colors: any;
 }> = ({ feature, index, colors }) => {
@@ -237,7 +252,7 @@ const FeatureItem: React.FC<{
       withSpring(0, { damping: 15, stiffness: 100 }),
     );
     opacity.value = withDelay(index * 50, withSpring(1));
-  }, []);
+  }, [index, opacity, translateX]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
@@ -246,7 +261,12 @@ const FeatureItem: React.FC<{
 
   return (
     <Animated.View style={[styles.featureItem, animatedStyle]}>
-      <Text style={styles.featureIcon}>{feature.icon}</Text>
+      <AppIcon
+        name={feature.iconName}
+        size={24}
+        color={colors.primary}
+        style={styles.featureIcon}
+      />
       <View style={styles.featureText}>
         <Text style={[styles.featureTitle, { color: colors.textPrimary }]}>
           {feature.title}
@@ -257,7 +277,7 @@ const FeatureItem: React.FC<{
           {feature.description}
         </Text>
       </View>
-      <Text style={[styles.checkmark, { color: colors.success }]}>✓</Text>
+      <AppIcon name="checkmark" size={18} color={colors.success} />
     </Animated.View>
   );
 };
@@ -422,7 +442,7 @@ const styles = StyleSheet.create({
     gap: SPACING.md,
   },
   featureIcon: {
-    fontSize: 24,
+    width: 28,
   },
   featureText: {
     flex: 1,
@@ -434,10 +454,7 @@ const styles = StyleSheet.create({
   featureDescription: {
     ...TYPOGRAPHY.caption,
   },
-  checkmark: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
+  checkmark: {},
   loadingContainer: {
     paddingVertical: SPACING.xxxl,
     alignItems: 'center',

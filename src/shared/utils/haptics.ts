@@ -1,49 +1,29 @@
-import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+import { usePreferencesStore } from '../stores/preferencesStore';
 
-const options = {
-  enableVibrateFallback: true,
-  ignoreAndroidSystemSettings: false,
+type HapticTrigger = 'selection' | 'impactLight' | 'impactMedium' | 'impactHeavy';
+
+let cached: any | null = null;
+
+const getHapticsModule = async () => {
+  if (cached) return cached;
+  const mod: any = await import('react-native-haptic-feedback');
+  cached = mod?.default ?? mod;
+  return cached;
 };
 
-export class HapticService {
-  private static enabled = true;
+export const triggerHaptic = async (type: HapticTrigger = 'selection') => {
+  const { hapticsEnabled } = usePreferencesStore.getState();
+  if (!hapticsEnabled) return;
 
-  static setEnabled(enabled: boolean) {
-    this.enabled = enabled;
+  try {
+    const HapticFeedback = await getHapticsModule();
+    if (!HapticFeedback?.trigger) return;
+    HapticFeedback.trigger(type, {
+      enableVibrateFallback: true,
+      ignoreAndroidSystemSettings: false,
+    });
+  } catch {
+    // Haptics are optional; ignore failures (e.g. in tests/simulator)
   }
+};
 
-  static light() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('impactLight', options);
-  }
-
-  static medium() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('impactMedium', options);
-  }
-
-  static heavy() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('impactHeavy', options);
-  }
-
-  static success() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('notificationSuccess', options);
-  }
-
-  static warning() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('notificationWarning', options);
-  }
-
-  static error() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('notificationError', options);
-  }
-
-  static selection() {
-    if (!this.enabled) return;
-    ReactNativeHapticFeedback.trigger('selection', options);
-  }
-}

@@ -12,17 +12,15 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withTiming,
-  interpolate,
-  Extrapolate,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import LinearGradient from 'react-native-linear-gradient';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 import { CustomButton } from '../../shared/components/CustomButton';
+import { AppIcon, AppIconName } from '../../shared/components/AppIcon';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 interface OnboardingScreenProps {
   onComplete: () => void;
@@ -32,17 +30,17 @@ const SCREENS = [
   {
     title: 'Create Stunning Video Collages',
     subtitle: 'Combine multiple videos into one masterpiece',
-    emoji: '🎬',
+    iconName: 'film-outline' as AppIconName,
   },
   {
     title: 'Easy Editing',
     subtitle: 'Drag, drop, and customize with intuitive gestures',
-    emoji: '✨',
+    iconName: 'sparkles-outline' as AppIconName,
   },
   {
     title: 'Professional Export',
     subtitle: 'Export in high quality up to 4K resolution',
-    emoji: '🎯',
+    iconName: 'cloud-upload-outline' as AppIconName,
   },
 ];
 
@@ -97,8 +95,7 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
         colors={gradients.primary}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-        opacity={0.1}
+        style={[StyleSheet.absoluteFill, { opacity: 0.1 }]}
       />
 
       {/* Skip Button */}
@@ -113,7 +110,12 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
         <Animated.View style={[styles.screensContainer, animatedStyle]}>
           {SCREENS.map((screen, index) => (
             <View key={index} style={styles.screen}>
-              <Text style={styles.emoji}>{screen.emoji}</Text>
+              <AppIcon
+                name={screen.iconName}
+                size={80}
+                color={colors.primary}
+                style={styles.emoji}
+              />
               <Text style={[styles.title, { color: colors.textPrimary }]}>
                 {screen.title}
               </Text>
@@ -176,7 +178,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.xl,
   },
   emoji: {
-    fontSize: 80,
     marginBottom: SPACING.xl,
   },
   title: {

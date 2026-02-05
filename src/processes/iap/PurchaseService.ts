@@ -1,7 +1,6 @@
 import Purchases, {
   PurchasesPackage,
   CustomerInfo,
-  PurchasesOffering,
 } from 'react-native-purchases';
 import { Platform } from 'react-native';
 

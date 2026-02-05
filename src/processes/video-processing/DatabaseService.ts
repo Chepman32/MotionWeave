@@ -1,10 +1,54 @@
 import SQLite from 'react-native-sqlite-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import RNFS from 'react-native-fs';
 import { Project, MediaClip } from '../../shared/types';
 
 SQLite.enablePromise(true);
 
+const FALLBACK_PROJECTS_KEY = 'motionweave.projects.v1';
+
 export class DatabaseService {
   private static db: SQLite.SQLiteDatabase | null = null;
+
+  private static async getFallbackProjects(): Promise<Project[]> {
+    try {
+      const raw = await AsyncStorage.getItem(FALLBACK_PROJECTS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed as Project[];
+    } catch (error) {
+      console.warn('Failed to read fallback projects:', error);
+      return [];
+    }
+  }
+
+  private static async setFallbackProjects(projects: Project[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(
+        FALLBACK_PROJECTS_KEY,
+        JSON.stringify(projects),
+      );
+    } catch (error) {
+      console.warn('Failed to write fallback projects:', error);
+    }
+  }
+
+  private static async upsertFallbackProject(project: Project): Promise<void> {
+    const existing = await this.getFallbackProjects();
+    const merged = [
+      project,
+      ...existing.filter(p => p && p.id !== project.id),
+    ].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    await this.setFallbackProjects(merged);
+  }
+
+  private static async deleteFallbackProject(id: string): Promise<void> {
+    const existing = await this.getFallbackProjects();
+    const next = existing.filter(p => p && p.id !== id);
+    await this.setFallbackProjects(next);
+  }
 
   static async initialize(): Promise<void> {
     try {
@@ -28,7 +72,7 @@ export class DatabaseService {
     try {
       await this.db.executeSql('DROP TABLE IF EXISTS video_clips;');
       console.log('✓ Migrated: dropped old video_clips table');
-    } catch (e) {
+    } catch {
       // Table might not exist, that's fine
     }
 
@@ -80,7 +124,10 @@ export class DatabaseService {
 
   // Project CRUD Operations
   static async saveProject(project: Project): Promise<void> {
-    if (!this.db) throw new Error('Database not initialized');
+    if (!this.db) {
+      await this.upsertFallbackProject(project);
+      return;
+    }
 
     const query = `
       INSERT OR REPLACE INTO projects 
@@ -101,83 +148,161 @@ export class DatabaseService {
       JSON.stringify(project.settings),
     ];
 
-    await this.db.executeSql(query, params);
+    try {
+      await this.db.executeSql(query, params);
 
-    // Save video clips
-    for (const clip of project.videos) {
-      await this.saveMediaClip(project.id, clip);
+      // Sync media clips (delete removed, then upsert current)
+      await this.db.executeSql('DELETE FROM media_clips WHERE project_id = ?', [
+        project.id,
+      ]);
+
+      // Save media clips
+      for (const clip of project.videos) {
+        await this.saveMediaClip(project.id, clip);
+      }
+    } catch (error) {
+      console.warn('SQLite saveProject failed, falling back:', error);
+    } finally {
+      this.upsertFallbackProject(project).catch(error =>
+        console.warn('Failed to mirror project to fallback storage:', error),
+      );
     }
   }
 
   static async getProject(id: string): Promise<Project | null> {
-    if (!this.db) throw new Error('Database not initialized');
-
-    const query = 'SELECT * FROM projects WHERE id = ?';
-    const [result] = await this.db.executeSql(query, [id]);
-
-    if (result.rows.length === 0) return null;
-
-    const row = result.rows.item(0);
-    const videos = await this.getMediaClips(id);
-
-    return {
-      id: row.id,
-      name: row.name,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      thumbnailPath: row.thumbnail_path,
-      duration: row.duration,
-      layout: this.safeJsonParse(row.layout_config, { type: 'grid', rows: 2, cols: 2, spacing: 8, borderRadius: 12, aspectRatio: '1:1' }),
-      videos,
-      outputPath: row.export_path,
-      settings: this.safeJsonParse(row.settings, { resolution: '1080p', frameRate: 30, quality: 'high', format: 'mp4' }),
-    };
-  }
-
-  private static safeJsonParse(jsonString: string | null, defaultValue: any): any {
-    try {
-      return jsonString ? JSON.parse(jsonString) : defaultValue;
-    } catch (e) {
-      return defaultValue;
+    if (!this.db) {
+      const projects = await this.getFallbackProjects();
+      return projects.find(p => p && p.id === id) || null;
     }
-  }
 
-  static async getAllProjects(): Promise<Project[]> {
-    if (!this.db) throw new Error('Database not initialized');
+    try {
+      const query = 'SELECT * FROM projects WHERE id = ?';
+      const [result] = await this.db.executeSql(query, [id]);
 
-    const query = 'SELECT * FROM projects ORDER BY updated_at DESC';
-    const [result] = await this.db.executeSql(query);
+      if (result.rows.length === 0) return null;
 
-    const projects: Project[] = [];
+      const row = result.rows.item(0);
+      const videos = await this.getMediaClips(id);
 
-    for (let i = 0; i < result.rows.length; i++) {
-      const row = result.rows.item(i);
-      const videos = await this.getMediaClips(row.id);
-
-      projects.push({
+      return {
         id: row.id,
         name: row.name,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         thumbnailPath: row.thumbnail_path,
         duration: row.duration,
-        layout: this.safeJsonParse(row.layout_config, { type: 'grid', rows: 2, cols: 2, spacing: 8, borderRadius: 12, aspectRatio: '1:1' }),
+        layout: this.safeJsonParse(row.layout_config, {
+          type: 'grid',
+          rows: 2,
+          cols: 2,
+          spacing: 8,
+          borderRadius: 12,
+          aspectRatio: '1:1',
+        }),
         videos,
         outputPath: row.export_path,
-        settings: this.safeJsonParse(row.settings, { resolution: '1080p', frameRate: 30, quality: 'high', format: 'mp4' }),
-      });
+        settings: this.safeJsonParse(row.settings, {
+          resolution: '1080p',
+          frameRate: 30,
+          quality: 'high',
+          format: 'mp4',
+        }),
+      };
+    } catch (error) {
+      console.warn('SQLite getProject failed, using fallback:', error);
+      const projects = await this.getFallbackProjects();
+      return projects.find(p => p && p.id === id) || null;
     }
+  }
 
-    return projects;
+  private static safeJsonParse(jsonString: string | null, defaultValue: any): any {
+    try {
+      return jsonString ? JSON.parse(jsonString) : defaultValue;
+    } catch {
+      return defaultValue;
+    }
+  }
+
+  static async getAllProjects(): Promise<Project[]> {
+    const fallbackProjects = await this.getFallbackProjects();
+    const fallbackSorted = [...fallbackProjects].sort(
+      (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+    );
+
+    if (!this.db) return fallbackSorted;
+
+    try {
+      const query = 'SELECT * FROM projects ORDER BY updated_at DESC';
+      const [result] = await this.db.executeSql(query);
+
+      const projects: Project[] = [];
+
+      for (let i = 0; i < result.rows.length; i++) {
+        const row = result.rows.item(i);
+        const videos = await this.getMediaClips(row.id);
+
+        projects.push({
+          id: row.id,
+          name: row.name,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          thumbnailPath: row.thumbnail_path,
+          duration: row.duration,
+          layout: this.safeJsonParse(row.layout_config, {
+            type: 'grid',
+            rows: 2,
+            cols: 2,
+            spacing: 8,
+            borderRadius: 12,
+            aspectRatio: '1:1',
+          }),
+          videos,
+          outputPath: row.export_path,
+          settings: this.safeJsonParse(row.settings, {
+            resolution: '1080p',
+            frameRate: 30,
+            quality: 'high',
+            format: 'mp4',
+          }),
+        });
+      }
+
+      const byId = new Map<string, Project>();
+      for (const p of [...fallbackSorted, ...projects]) {
+        if (!p || !p.id) continue;
+        const existing = byId.get(p.id);
+        if (!existing || (p.updatedAt || 0) > (existing.updatedAt || 0)) {
+          byId.set(p.id, p);
+        }
+      }
+
+      return [...byId.values()].sort(
+        (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+      );
+    } catch (error) {
+      console.warn('SQLite getAllProjects failed, using fallback:', error);
+      return fallbackSorted;
+    }
   }
 
   static async deleteProject(id: string): Promise<void> {
-    if (!this.db) throw new Error('Database not initialized');
+    if (!this.db) {
+      await this.deleteFallbackProject(id);
+      return;
+    }
 
-    await this.db.executeSql('DELETE FROM media_clips WHERE project_id = ?', [
-      id,
-    ]);
-    await this.db.executeSql('DELETE FROM projects WHERE id = ?', [id]);
+    try {
+      await this.db.executeSql('DELETE FROM media_clips WHERE project_id = ?', [
+        id,
+      ]);
+      await this.db.executeSql('DELETE FROM projects WHERE id = ?', [id]);
+    } catch (error) {
+      console.warn('SQLite deleteProject failed, updating fallback:', error);
+    } finally {
+      this.deleteFallbackProject(id).catch(error =>
+        console.warn('Failed to delete project from fallback storage:', error),
+      );
+    }
   }
 
   // Media Clip Operations
@@ -218,21 +343,68 @@ export class DatabaseService {
     const [result] = await this.db.executeSql(query, [projectId]);
 
     const clips: MediaClip[] = [];
+    const mediaDir = `${RNFS.DocumentDirectoryPath}/MotionWeave/videos`;
 
     for (let i = 0; i < result.rows.length; i++) {
       const row = result.rows.item(i);
+      const duration = typeof row.duration === 'number' ? row.duration : 0;
+
+      let localUri: string = row.local_uri;
+      let thumbnailUri: string | undefined = row.thumbnail_uri || undefined;
+
+      // Migrate legacy iOS Photo Library URIs (ph://, assets-library://) to local files
+      // so that react-native-video can play them reliably.
+      if (
+        Platform.OS === 'ios' &&
+        typeof localUri === 'string' &&
+        (localUri.startsWith('ph://') || localUri.startsWith('assets-library://'))
+      ) {
+        try {
+          const destPath = `${mediaDir}/${row.id}.${row.type === 'image' ? 'jpg' : 'mp4'}`;
+          const exists = await RNFS.exists(destPath);
+          if (!exists) {
+            const dirExists = await RNFS.exists(mediaDir);
+            if (!dirExists) {
+              await RNFS.mkdir(mediaDir, { NSURLIsExcludedFromBackupKey: true });
+            }
+
+            if (row.type === 'image') {
+              await RNFS.copyAssetsFileIOS(localUri, destPath, 0, 0, 1, 1, 'contain');
+            } else {
+              await RNFS.copyAssetsVideoIOS(localUri, destPath);
+            }
+          }
+
+          const migratedUri = `file://${destPath}`;
+          localUri = migratedUri;
+          thumbnailUri = migratedUri;
+
+          await this.db.executeSql(
+            'UPDATE media_clips SET local_uri = ?, thumbnail_uri = ? WHERE id = ?',
+            [localUri, thumbnailUri || null, row.id],
+          );
+        } catch (error) {
+          console.warn('Failed to migrate iOS media URI:', error);
+        }
+      }
+
       clips.push({
         id: row.id,
-        localUri: row.local_uri,
-        thumbnailUri: row.thumbnail_uri,
+        localUri,
+        thumbnailUri,
         type: row.type || 'video',
-        duration: row.duration,
-        startTime: row.start_time,
-        endTime: row.end_time,
-        position: JSON.parse(row.position),
-        transform: JSON.parse(row.transform_config),
-        filters: JSON.parse(row.filters),
-        volume: row.volume,
+        duration,
+        startTime: typeof row.start_time === 'number' ? row.start_time : 0,
+        endTime: typeof row.end_time === 'number' ? row.end_time : duration,
+        position: this.safeJsonParse(row.position, { row: 0, col: 0 }),
+        transform: this.safeJsonParse(row.transform_config, {
+          scale: 1,
+          translateX: 0,
+          translateY: 0,
+          rotation: 0,
+        }),
+        filters: this.safeJsonParse(row.filters, []),
+        volume: typeof row.volume === 'number' ? row.volume : 1.0,
       });
     }
 

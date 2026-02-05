@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -17,6 +16,7 @@ import Slider from '@react-native-community/slider';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 import { FilterConfig } from '../../shared/types';
+import { AppIcon, AppIconName } from '../../shared/components/AppIcon';
 
 interface FilterPanelProps {
   currentFilter: FilterConfig;
@@ -26,15 +26,15 @@ interface FilterPanelProps {
 const FILTER_PRESETS: Array<{
   type: FilterConfig['type'];
   name: string;
-  icon: string;
+  iconName: AppIconName;
 }> = [
-  { type: 'none', name: 'None', icon: '⭕' },
-  { type: 'vivid', name: 'Vivid', icon: '🌈' },
-  { type: 'bw', name: 'B&W', icon: '⚫' },
-  { type: 'vintage', name: 'Vintage', icon: '📷' },
-  { type: 'cinematic', name: 'Cinematic', icon: '🎬' },
-  { type: 'cool', name: 'Cool', icon: '❄️' },
-  { type: 'warm', name: 'Warm', icon: '🔥' },
+  { type: 'none', name: 'None', iconName: 'close-circle-outline' },
+  { type: 'vivid', name: 'Vivid', iconName: 'color-palette-outline' },
+  { type: 'bw', name: 'B&W', iconName: 'contrast' },
+  { type: 'vintage', name: 'Vintage', iconName: 'camera-outline' },
+  { type: 'cinematic', name: 'Cinematic', iconName: 'film-outline' },
+  { type: 'cool', name: 'Cool', iconName: 'snow-outline' },
+  { type: 'warm', name: 'Warm', iconName: 'flame-outline' },
 ];
 
 export const FilterPanel: React.FC<FilterPanelProps> = ({
@@ -133,7 +133,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
 };
 
 const FilterPreset: React.FC<{
-  preset: { type: string; name: string; icon: string };
+  preset: { type: string; name: string; iconName: AppIconName };
   isSelected: boolean;
   onSelect: () => void;
   colors: any;
@@ -165,7 +165,12 @@ const FilterPreset: React.FC<{
           animatedStyle,
         ]}
       >
-        <Text style={styles.presetIcon}>{preset.icon}</Text>
+        <AppIcon
+          name={preset.iconName}
+          size={22}
+          color={isSelected ? '#FFFFFF' : colors.textSecondary}
+          style={styles.presetIcon}
+        />
         <Text
           style={[
             styles.presetName,
@@ -232,7 +237,7 @@ const styles = StyleSheet.create({
     gap: SPACING.xs,
   },
   presetIcon: {
-    fontSize: 28,
+    marginBottom: 2,
   },
   presetName: {
     ...TYPOGRAPHY.small,

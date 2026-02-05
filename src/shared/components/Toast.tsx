@@ -1,13 +1,13 @@
 import React, { useEffect } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { Text, StyleSheet } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  withDelay,
 } from 'react-native-reanimated';
 import { useTheme } from '../hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../constants/theme';
+import { AppIcon, AppIconName } from './AppIcon';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
 
@@ -18,11 +18,11 @@ interface ToastProps {
   onDismiss?: () => void;
 }
 
-const TOAST_ICONS: Record<ToastType, string> = {
-  success: '✓',
-  error: '✕',
-  info: 'ℹ',
-  warning: '⚠',
+const TOAST_ICONS: Record<ToastType, AppIconName> = {
+  success: 'checkmark-circle',
+  error: 'close-circle',
+  info: 'information-circle',
+  warning: 'warning',
 };
 
 export const Toast: React.FC<ToastProps> = ({
@@ -45,7 +45,7 @@ export const Toast: React.FC<ToastProps> = ({
     }, duration);
 
     return () => clearTimeout(timeout);
-  }, []);
+  }, [duration, onDismiss, translateY]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
@@ -72,7 +72,12 @@ export const Toast: React.FC<ToastProps> = ({
         animatedStyle,
       ]}
     >
-      <Text style={styles.icon}>{TOAST_ICONS[type]}</Text>
+      <AppIcon
+        name={TOAST_ICONS[type]}
+        size={20}
+        color="#FFFFFF"
+        style={styles.icon}
+      />
       <Text style={styles.message}>{message}</Text>
     </Animated.View>
   );
@@ -96,8 +101,6 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   icon: {
-    fontSize: 20,
-    color: '#FFFFFF',
     marginRight: SPACING.sm,
   },
   message: {

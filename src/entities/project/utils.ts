@@ -2,7 +2,7 @@ import { Project, LayoutConfig, ProjectSettings } from '../../shared/types';
 import { generateId } from '../../shared/utils/helpers';
 
 export const createNewProject = (
-  name: string = 'New Project',
+  name: string = '',
   layout?: LayoutConfig,
 ): Project => {
   const defaultLayout: LayoutConfig = layout || {
@@ -49,10 +49,6 @@ export const validateProject = (
   project: Project,
 ): { valid: boolean; errors: string[] } => {
   const errors: string[] = [];
-
-  if (!project.name || project.name.trim() === '') {
-    errors.push('Project name is required');
-  }
 
   if (project.videos.length === 0) {
     errors.push('Project must have at least one video');

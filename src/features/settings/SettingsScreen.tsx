@@ -10,17 +10,45 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../shared/hooks/useTheme';
-import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
+import { SPACING, THEMES, ThemeName, TYPOGRAPHY } from '../../shared/constants/theme';
+import { AppIcon } from '../../shared/components/AppIcon';
+import { AppBottomNav } from '../../shared/components/AppBottomNav';
+import { useThemeStore } from '../../shared/stores/themeStore';
+import { usePreferencesStore } from '../../shared/stores/preferencesStore';
+import { triggerHaptic } from '../../shared/utils/haptics';
 
 interface SettingsScreenProps {
   onBack: () => void;
+  onNavigateToHome?: () => void;
+  onNavigateToTemplates?: () => void;
 }
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
+const THEME_OPTIONS: Array<{
+  key: ThemeName;
+  label: string;
+  description: string;
+}> = [
+  { key: 'light', label: 'Light', description: 'Clean and bright' },
+  { key: 'dark', label: 'Dark', description: 'Easy on the eyes' },
+  { key: 'solar', label: 'Solar', description: 'Warm, sunny tones' },
+  { key: 'mono', label: 'Mono', description: 'Minimal grayscale' },
+];
+
+export const SettingsScreen: React.FC<SettingsScreenProps> = ({
+  onBack,
+  onNavigateToHome,
+  onNavigateToTemplates,
+}) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const [hapticEnabled, setHapticEnabled] = React.useState(true);
-  const [autoSave, setAutoSave] = React.useState(true);
+  const selectedTheme = useThemeStore(state => state.theme);
+  const setTheme = useThemeStore(state => state.setTheme);
+  const soundEnabled = usePreferencesStore(state => state.soundEnabled);
+  const hapticsEnabled = usePreferencesStore(state => state.hapticsEnabled);
+  const setSoundEnabled = usePreferencesStore(state => state.setSoundEnabled);
+  const setHapticsEnabled = usePreferencesStore(
+    state => state.setHapticsEnabled,
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -28,7 +56,11 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + SPACING.md }]}>
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
-          <Text style={{ fontSize: 24, color: colors.textPrimary }}>←</Text>
+          <AppIcon
+            name="chevron-back"
+            size={24}
+            color={colors.textPrimary}
+          />
         </TouchableOpacity>
         <Text style={[styles.title, { color: colors.textPrimary }]}>
           Settings
@@ -36,53 +68,80 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView style={styles.content}>
-        {/* App Preferences */}
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: SPACING.xxxl }}
+      >
+        {/* Theme */}
         <View style={[styles.section, { backgroundColor: colors.surface }]}>
           <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-            App Preferences
+            Theme
           </Text>
 
-          <SettingRow
-            label="Haptic Feedback"
-            value={hapticEnabled}
-            onValueChange={setHapticEnabled}
-          />
+          {THEME_OPTIONS.map(option => {
+            const isSelected = selectedTheme === option.key;
+            const swatch = THEMES[option.key].colors.primary;
 
-          <SettingRow
-            label="Auto-save Projects"
-            value={autoSave}
-            onValueChange={setAutoSave}
-          />
+            return (
+              <TouchableOpacity
+                key={option.key}
+                onPress={() => {
+                  triggerHaptic('selection');
+                  setTheme(option.key);
+                }}
+                style={[styles.themeRow, { borderBottomColor: colors.border }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Theme: ${option.label}`}
+                accessibilityState={{ selected: isSelected }}
+              >
+                <View
+                  style={[
+                    styles.themeSwatch,
+                    { backgroundColor: swatch, borderColor: colors.border },
+                  ]}
+                />
+                <View style={styles.themeText}>
+                  <Text
+                    style={[styles.themeLabel, { color: colors.textPrimary }]}
+                  >
+                    {option.label}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.themeDescription,
+                      { color: colors.textSecondary },
+                    ]}
+                  >
+                    {option.description}
+                  </Text>
+                </View>
+                <AppIcon
+                  name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={isSelected ? colors.primary : colors.textSecondary}
+                />
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* Export Settings */}
+        {/* Preferences */}
         <View style={[styles.section, { backgroundColor: colors.surface }]}>
           <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-            Export Settings
+            Preferences
           </Text>
 
-          <TouchableOpacity style={styles.settingItem}>
-            <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
-              Default Resolution
-            </Text>
-            <Text
-              style={[styles.settingValue, { color: colors.textSecondary }]}
-            >
-              1080p
-            </Text>
-          </TouchableOpacity>
+          <SettingRow
+            label="Sound"
+            value={soundEnabled}
+            onValueChange={setSoundEnabled}
+          />
 
-          <TouchableOpacity style={styles.settingItem}>
-            <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
-              Default Quality
-            </Text>
-            <Text
-              style={[styles.settingValue, { color: colors.textSecondary }]}
-            >
-              High
-            </Text>
-          </TouchableOpacity>
+          <SettingRow
+            label="Haptics"
+            value={hapticsEnabled}
+            onValueChange={setHapticsEnabled}
+          />
         </View>
 
         {/* About */}
@@ -91,7 +150,9 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
             About
           </Text>
 
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity
+            style={[styles.settingItem, { borderBottomColor: colors.border }]}
+          >
             <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
               Version
             </Text>
@@ -102,19 +163,31 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onBack }) => {
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity
+            style={[styles.settingItem, { borderBottomColor: colors.border }]}
+          >
             <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
               Privacy Policy
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.settingItem}>
+          <TouchableOpacity
+            style={[styles.settingItem, { borderBottomColor: colors.border }]}
+          >
             <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
               Terms of Service
             </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      <AppBottomNav
+        activeTab="settings"
+        onSelectTab={tab => {
+          if (tab === 'home') onNavigateToHome?.();
+          if (tab === 'templates') onNavigateToTemplates?.();
+        }}
+      />
     </View>
   );
 };
@@ -127,7 +200,7 @@ const SettingRow: React.FC<{
   const { colors } = useTheme();
 
   return (
-    <View style={styles.settingItem}>
+    <View style={[styles.settingItem, { borderBottomColor: colors.border }]}>
       <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>
         {label}
       </Text>
@@ -171,13 +244,36 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.h3,
     marginBottom: SPACING.md,
   },
+  themeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    gap: SPACING.md,
+  },
+  themeSwatch: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  themeText: {
+    flex: 1,
+  },
+  themeLabel: {
+    ...TYPOGRAPHY.body,
+    fontWeight: '600',
+  },
+  themeDescription: {
+    ...TYPOGRAPHY.small,
+    marginTop: 2,
+  },
   settingItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: SPACING.md,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
   },
   settingLabel: {
     ...TYPOGRAPHY.body,

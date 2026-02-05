@@ -4,10 +4,10 @@ import Video, { VideoRef } from 'react-native-video';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withTiming,
 } from 'react-native-reanimated';
 import { useTheme } from '../hooks/useTheme';
 import { SPACING } from '../constants/theme';
+import { AppIcon } from './AppIcon';
 
 interface VideoPlayerProps {
   uri: string;
@@ -53,11 +53,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setIsPlaying(!isPlaying);
   };
 
-  const handleSeek = (time: number) => {
-    videoRef.current?.seek(time);
-    setCurrentTime(time);
-  };
-
   const controlsStyle = useAnimatedStyle(() => ({
     opacity: controlsOpacity.value,
   }));
@@ -88,7 +83,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onPress={togglePlayPause}
             style={[styles.playButton, { backgroundColor: colors.primary }]}
           >
-            <Text style={styles.playIcon}>{isPlaying ? '⏸' : '▶'}</Text>
+            <AppIcon
+              name={isPlaying ? 'pause' : 'play'}
+              size={20}
+              color="#FFFFFF"
+            />
           </TouchableOpacity>
 
           <View style={styles.timeContainer}>
@@ -148,10 +147,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: SPACING.sm,
   },
-  playIcon: {
-    fontSize: 20,
-    color: '#FFFFFF',
-  },
+  playIcon: {},
   timeContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
