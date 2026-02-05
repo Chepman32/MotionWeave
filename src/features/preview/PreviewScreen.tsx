@@ -139,97 +139,39 @@ const CompositionPreview: React.FC<{
   isPlaying: boolean;
   soundEnabled: boolean;
 }> = ({ layout, clips, isPlaying, soundEnabled }) => {
-  const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
-  const aspectRatio = getAspectRatio(layout.aspectRatio);
+  // For preview, show the first clip fullscreen
+  const first = clips[0] ?? null;
 
-  const maxWidth = windowWidth;
-  const maxHeight = windowHeight;
-  const previewWidth = Math.min(maxWidth, maxHeight * aspectRatio);
-  const previewHeight = previewWidth / aspectRatio;
-
-  const firstVideoId = clips.find(c => c.type === 'video')?.id ?? null;
-
-  if (layout.type !== 'grid' || !layout.rows || !layout.cols) {
-    const first = clips[0] ?? null;
-      return (
-      <View style={[styles.composition, { width: previewWidth, height: previewHeight }]}>
-        {first ? (
-          first.type === 'video' ? (
-            <Video
-              source={{ uri: normalizeMediaUri(first.localUri) }}
-              style={styles.compositionMedia}
-              resizeMode="contain"
-              paused={!isPlaying}
-              repeat={true}
-              muted={!soundEnabled}
-            />
-          ) : (
-            <Image
-              source={{ uri: normalizeMediaUri(first.localUri) }}
-              style={styles.compositionMedia}
-              resizeMode="contain"
-            />
-          )
-        ) : (
-          <View style={styles.emptyComposition}>
-            <AppIcon name="videocam-outline" size={28} color="#FFFFFF" />
-            <Text style={styles.emptyText}>No media</Text>
-          </View>
-        )}
+  if (!first) {
+    return (
+      <View style={styles.emptyComposition}>
+        <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
+        <Text style={styles.emptyText}>No media to preview</Text>
       </View>
     );
   }
 
-  const rows = layout.rows;
-  const cols = layout.cols;
-  const cellCount = rows * cols;
-  const cellWidth = previewWidth / cols;
-  const cellHeight = previewHeight / rows;
-
   return (
-    <View style={[styles.composition, { width: previewWidth, height: previewHeight }]}>
-      <View style={[styles.grid, { padding: layout.spacing / 2 }]}>
-        {Array.from({ length: cellCount }).map((_, i) => {
-          const clip = clips.find(
-            c => c.position.row * cols + c.position.col === i,
-          );
-
-          return (
-            <View
-              key={i}
-              style={[
-                styles.cellWrapper,
-                { width: cellWidth, height: cellHeight, padding: layout.spacing / 2 },
-              ]}
-            >
-              <View style={[styles.cell, { borderRadius: layout.borderRadius }]}>
-                {clip ? (
-                  clip.type === 'video' ? (
-                    <Video
-                      source={{ uri: normalizeMediaUri(clip.localUri) }}
-                      style={styles.compositionMedia}
-                      resizeMode="cover"
-                      paused={!isPlaying}
-                      repeat={true}
-                      muted={!soundEnabled || clip.id !== firstVideoId}
-                    />
-                  ) : (
-                    <Image
-                      source={{ uri: normalizeMediaUri(clip.localUri) }}
-                      style={styles.compositionMedia}
-                      resizeMode="cover"
-                    />
-                  )
-                ) : (
-                  <View style={styles.emptyCell} />
-                )}
-              </View>
-            </View>
-          );
-        })}
-      </View>
+    <View style={styles.fullscreenPreview}>
+      {first.type === 'video' ? (
+        <Video
+          source={{ uri: normalizeMediaUri(first.localUri) }}
+          style={styles.fullscreenMedia}
+          resizeMode="cover"
+          paused={!isPlaying}
+          repeat={true}
+          muted={!soundEnabled}
+        />
+      ) : (
+        <Image
+          source={{ uri: normalizeMediaUri(first.localUri) }}
+          style={styles.fullscreenMedia}
+          resizeMode="cover"
+        />
+      )}
     </View>
   );
+
 };
 
 const styles = StyleSheet.create({
@@ -246,9 +188,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   grid: {
-    flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
+    alignContent: 'flex-start',
   },
   cellWrapper: {},
   cell: {
@@ -271,6 +213,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: SPACING.sm,
+  },
+  fullscreenPreview: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000',
+  },
+  fullscreenMedia: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
   emptyText: {
     color: '#FFFFFF',
