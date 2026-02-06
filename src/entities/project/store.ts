@@ -6,11 +6,13 @@ interface ProjectStore {
   projects: Project[];
   currentProject: Project | null;
   isLoading: boolean;
+  isHydrated: boolean;
   addProject: (project: Project) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   setCurrentProject: (project: Project | null) => void;
   loadProjects: () => Promise<void>;
+  hydrate: () => Promise<void>;
 }
 
 const isProjectLike = (value: unknown): value is Project => {
@@ -43,6 +45,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   currentProject: null,
   isLoading: false,
+  isHydrated: false,
+
+  hydrate: async () => {
+    try {
+      await get().loadProjects();
+      set({ isHydrated: true });
+    } catch (error) {
+      console.warn('Failed to hydrate projects:', error);
+      set({ isHydrated: true });
+    }
+  },
 
   addProject: async project => {
     try {

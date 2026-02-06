@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,13 +10,18 @@ import {
   StatusBar,
   Image,
   Modal,
+  LayoutChangeEvent,
 } from 'react-native';
-import Video from 'react-native-video';
+import Video, { VideoRef, OnProgressData } from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  useFrameCallback,
+  useAnimatedRef,
+  useAnimatedReaction,
+  scrollTo,
   runOnJS,
   FadeIn,
   FadeOut,
@@ -37,6 +42,31 @@ import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const AnimatedAppIcon = Animated.createAnimatedComponent(AppIcon);
+const AnimatedTouchableOpacity =
+  Animated.createAnimatedComponent(TouchableOpacity);
+
+const PIXELS_PER_SECOND = 40;
+const MIN_CLIP_DURATION = 0.5;
+const TRIM_HANDLE_WIDTH = 24;
+const TIMELINE_CLIP_HEIGHT = 56;
+const PLAYHEAD_COLOR = '#FFFFFF';
+const SELECTED_COLOR = '#FFD700';
+
+type TimelineSegment = {
+  clip: MediaClip;
+  start: number;
+  end: number;
+  duration: number;
+};
+
+const getClipEffectiveDuration = (clip: MediaClip): number => {
+  const trimmed = clip.endTime - clip.startTime;
+  if (trimmed > 0) return trimmed;
+  if (clip.type === 'image') {
+    return clip.duration > 0 ? clip.duration : DEFAULT_IMAGE_DURATION_SECONDS;
+  }
+  return clip.duration > 0 ? clip.duration : 0;
+};
 
 interface EditorScreenV2Props {
   onBack: () => void;
@@ -56,8 +86,8 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 
   const [project, setProject] = useState<Project | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+  const [timelineScale, setTimelineScale] = useState(1);
   const [isAssetsExpanded, setIsAssetsExpanded] = useState(false);
-  const [timelineZoom, setTimelineZoom] = useState(1);
   const [activeTab, setActiveTab] = useState<
     'layout' | 'effects' | 'audio' | 'export'
   >('layout');
@@ -65,6 +95,16 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const [showExportModal, setShowExportModal] = useState(false);
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
   const soundEnabled = usePreferencesStore(state => state.soundEnabled);
+
+  // Playback state
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<VideoRef>(null);
+  const currentTimeRef = useRef(0);
+  const activeClipIdRef = useRef<string | null>(null);
+  const activeSegmentRef = useRef<TimelineSegment | null>(null);
+  const pendingSeekRef = useRef<{ clipId: string; time: number } | null>(null);
+  const didAutoAdvanceRef = useRef<string | null>(null);
 
   const historyRef = useRef<Project[]>([]);
   const historyIndexRef = useRef(-1);
@@ -74,6 +114,153 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const assetsChevronStyle = useAnimatedStyle(() => ({
     transform: [{ rotateZ: `${assetsExpandedProgress.value * 180}deg` }],
   }));
+
+  // Timeline segments & playback logic
+  const segments = useMemo(() => {
+    if (!project) return [];
+    let t = 0;
+    const segs: TimelineSegment[] = [];
+    project.videos.forEach(clip => {
+      const d = getClipEffectiveDuration(clip);
+      segs.push({ clip, start: t, end: t + d, duration: d });
+      t += d;
+    });
+    return segs;
+  }, [project]);
+
+  const totalDuration = useMemo(() => {
+    if (segments.length === 0) return 0;
+    return segments[segments.length - 1].end;
+  }, [segments]);
+
+  const getSegmentForTime = useCallback(
+    (time: number): { segment: TimelineSegment; localTime: number } | null => {
+      if (segments.length === 0 || totalDuration <= 0) return null;
+      const clamped = Math.max(0, Math.min(totalDuration, time));
+      const idx = segments.findIndex(seg => clamped < seg.end);
+      const segment = idx >= 0 ? segments[idx] : segments[segments.length - 1];
+      const localTime = Math.max(0, clamped - segment.start);
+      return { segment, localTime };
+    },
+    [totalDuration, segments],
+  );
+
+  const activePlayback = useMemo(
+    () => getSegmentForTime(currentTime),
+    [currentTime, getSegmentForTime],
+  );
+  const activeSegment = activePlayback?.segment ?? null;
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    activeClipIdRef.current = activeSegment?.clip.id ?? null;
+    activeSegmentRef.current = activeSegment;
+    didAutoAdvanceRef.current = null;
+
+    if (!activeSegment || activeSegment.clip.type !== 'video') return;
+    const localTime = Math.max(0, currentTimeRef.current - activeSegment.start);
+    const seekTo =
+      activeSegment.clip.startTime +
+      Math.min(localTime, activeSegment.duration);
+    pendingSeekRef.current = { clipId: activeSegment.clip.id, time: seekTo };
+  }, [activeSegment]);
+
+  const handleVideoLoad = useCallback(() => {
+    const pending = pendingSeekRef.current;
+    const activeId = activeClipIdRef.current;
+    if (!pending || !activeId || pending.clipId !== activeId) return;
+    videoRef.current?.seek(pending.time);
+    pendingSeekRef.current = null;
+  }, []);
+
+  const handleTimelineSeek = useCallback(
+    (time: number, resetAutoAdvance = true) => {
+      if (segments.length === 0 || totalDuration <= 0) return;
+      const clamped = Math.max(0, Math.min(totalDuration, time));
+      if (resetAutoAdvance) didAutoAdvanceRef.current = null;
+      setCurrentTime(clamped);
+
+      const next = getSegmentForTime(clamped);
+      if (!next) return;
+      if (next.segment.clip.type === 'video') {
+        const seekTo =
+          next.segment.clip.startTime +
+          Math.min(next.localTime, next.segment.duration);
+        pendingSeekRef.current = { clipId: next.segment.clip.id, time: seekTo };
+        if (activeClipIdRef.current === next.segment.clip.id) {
+          videoRef.current?.seek(seekTo);
+          pendingSeekRef.current = null;
+        }
+      } else {
+        pendingSeekRef.current = null;
+      }
+    },
+    [totalDuration, getSegmentForTime, segments.length],
+  );
+
+  const handleVideoProgress = useCallback(
+    (clipId: string, data: OnProgressData) => {
+      if (!isPlaying) return;
+      if (clipId !== activeClipIdRef.current) return;
+      const seg = activeSegmentRef.current;
+      if (!seg || seg.clip.id !== clipId) return;
+
+      const localTime = Math.max(0, data.currentTime - seg.clip.startTime);
+      const clampedLocal = Math.min(localTime, seg.duration);
+      const globalTime = seg.start + clampedLocal;
+      setCurrentTime(globalTime);
+
+      if (seg.duration <= 0 || didAutoAdvanceRef.current === clipId) return;
+      if (clampedLocal >= seg.duration - 0.05) {
+        didAutoAdvanceRef.current = clipId;
+        handleTimelineSeek(seg.end >= totalDuration ? 0 : seg.end, false);
+      }
+    },
+    [totalDuration, isPlaying, handleTimelineSeek],
+  );
+
+  // Image playback timer
+  useEffect(() => {
+    if (!isPlaying || !activeSegment || activeSegment.clip.type !== 'image') return;
+    if (totalDuration <= 0) return;
+
+    let rafId = 0;
+    let last = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      const dt = (now - last) / 1000;
+      last = now;
+
+      setCurrentTime(prev => {
+        const next = prev + dt;
+        if (next >= totalDuration) return 0;
+        return next;
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [activeSegment, totalDuration, isPlaying]);
+
+  useEffect(() => {
+    if (totalDuration <= 0) {
+      if (currentTime !== 0) {
+        setCurrentTime(0);
+      }
+      return;
+    }
+    if (currentTime > totalDuration) {
+      setCurrentTime(totalDuration);
+    }
+  }, [currentTime, totalDuration]);
+
+  const togglePlayPause = useCallback(() => {
+    setIsPlaying(p => !p);
+  }, []);
 
   useEffect(() => {
     if (project) return;
@@ -151,6 +338,8 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       };
 
       commitProject(updatedProject);
+      setSelectedClipId(mediaClips[0]?.id ?? null);
+      handleTimelineSeek(totalDuration);
       await updateProject(project.id, updatedProject);
     } catch (error) {
       console.error('Failed to pick media:', error);
@@ -234,6 +423,45 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     setHistoryVersion(v => v + 1);
   }, []);
 
+  const handleTrimClip = useCallback(
+    (clipId: string, newStartTime: number, newEndTime: number) => {
+      if (!project) return;
+
+      const targetClip = project.videos.find(v => v.id === clipId);
+      if (!targetClip) return;
+
+      const clampedStart = Math.max(
+        0,
+        Math.min(newStartTime, targetClip.duration - MIN_CLIP_DURATION),
+      );
+      const clampedEnd = Math.max(
+        clampedStart + MIN_CLIP_DURATION,
+        Math.min(newEndTime, targetClip.duration),
+      );
+
+      if (
+        Math.abs(clampedStart - targetClip.startTime) < 0.001 &&
+        Math.abs(clampedEnd - targetClip.endTime) < 0.001
+      ) {
+        return;
+      }
+
+      const updatedVideos = project.videos.map(v =>
+        v.id === clipId
+          ? { ...v, startTime: clampedStart, endTime: clampedEnd }
+          : v,
+      );
+      const updatedProject = {
+        ...project,
+        videos: updatedVideos,
+        updatedAt: Date.now(),
+      };
+      commitProject(updatedProject);
+      updateProject(project.id, updatedProject);
+    },
+    [project, commitProject, updateProject],
+  );
+
   useEffect(() => {
     if (!project || !selectedClipId) return;
     const stillExists = project.videos.some(v => v.id === selectedClipId);
@@ -302,24 +530,6 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     });
   };
 
-  const clamp = (value: number, min: number, max: number) =>
-    Math.min(max, Math.max(min, value));
-
-  const handleTimelineZoomOut = () => {
-    setTimelineZoom(z => clamp(parseFloat((z - 0.2).toFixed(2)), 0.8, 2));
-  };
-
-  const handleTimelineZoomIn = () => {
-    setTimelineZoom(z => clamp(parseFloat((z + 0.2).toFixed(2)), 0.8, 2));
-  };
-
-  const timelineClipWidth = Math.round(60 * timelineZoom);
-  const timelineClipHeight = 40;
-  const timelineContainerHeight = Math.max(
-    100,
-    timelineClipHeight + SPACING.md * 2 + SPACING.sm + 14,
-  );
-
   const handleBackPress = async () => {
     if (!project) {
       onBack();
@@ -335,6 +545,21 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     } finally {
       onBack();
     }
+  };
+
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, value));
+
+  const handleTimelineZoomOut = () => {
+    setTimelineScale(prev =>
+      clamp(Number((prev - 0.25).toFixed(2)), 0.5, 3),
+    );
+  };
+
+  const handleTimelineZoomIn = () => {
+    setTimelineScale(prev =>
+      clamp(Number((prev + 0.25).toFixed(2)), 0.5, 3),
+    );
   };
 
   return (
@@ -453,7 +678,15 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
               exiting={FadeOut.duration(150)}
               style={styles.assetsContentInner}
             >
-              <SelectedClipPreview clip={selectedClip} />
+              <PlaybackPreview
+                activeSegment={activeSegment}
+                isPlaying={isPlaying}
+                soundEnabled={soundEnabled}
+                videoRef={videoRef}
+                onVideoLoad={handleVideoLoad}
+                onVideoProgress={handleVideoProgress}
+                selectedClip={selectedClip}
+              />
             </Animated.View>
           ) : (
             <Animated.View
@@ -474,42 +707,39 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         </View>
       </View>
 
-      {/* Timeline Controls */}
+      {/* Timeline Controls Row */}
       <View style={styles.removeButtonContainer}>
         <View style={styles.timelineControlsRow}>
           <TouchableOpacity
             onPress={handleTimelineZoomOut}
             style={[
-              styles.timelineControlButton,
+              styles.timelineScaleButton,
               { backgroundColor: colors.surface, borderColor: colors.border },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Timeline zoom out"
+            accessibilityLabel="Zoom timeline out"
           >
             <Text
-              style={[styles.timelineControlIcon, { color: colors.textPrimary }]}
+              style={[styles.timelineScaleButtonText, { color: colors.textPrimary }]}
             >
               −
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             onPress={handleTimelineZoomIn}
             style={[
-              styles.timelineControlButton,
+              styles.timelineScaleButton,
               { backgroundColor: colors.surface, borderColor: colors.border },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Timeline zoom in"
+            accessibilityLabel="Zoom timeline in"
           >
             <Text
-              style={[styles.timelineControlIcon, { color: colors.textPrimary }]}
+              style={[styles.timelineScaleButtonText, { color: colors.textPrimary }]}
             >
               +
             </Text>
           </TouchableOpacity>
-
-          {/* Remove Button - shown when item selected */}
           {selectedClipId && selectedClip && (
             <TouchableOpacity
               onPress={handleRemoveMedia}
@@ -523,75 +753,20 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         </View>
       </View>
 
-      {/* Timeline Area */}
-      <View
-        style={[
-          styles.timelineContainer,
-          { backgroundColor: colors.surface, height: timelineContainerHeight },
-        ]}
-      >
-        <Text style={[styles.timelineLabel, { color: colors.textSecondary }]}>
-          Timeline - {project.videos.length} item(s)
-        </Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {project.videos.map(item => {
-            const isSelected = selectedClipId === item.id;
-            const thumbnailUri = item.thumbnailUri
-              ? normalizeMediaUri(item.thumbnailUri)
-              : null;
-            const localUri = normalizeMediaUri(item.localUri);
-            const showThumbnailImage =
-              item.type === 'video' &&
-              !!thumbnailUri &&
-              item.thumbnailUri !== item.localUri;
-            
-            return (
-              <TouchableOpacity
-                key={item.id}
-                onPress={() => setSelectedClipId(item.id)}
-                style={[
-                  styles.timelineClip, 
-                  { 
-                    backgroundColor: colors.border,
-                    borderWidth: isSelected ? 2 : 0,
-                    borderColor: colors.primary,
-                    width: timelineClipWidth,
-                    height: timelineClipHeight,
-                  }
-                ]}
-              >
-                {item.type === 'video' && showThumbnailImage ? (
-                  <Image
-                    source={{ uri: thumbnailUri! }}
-                    style={styles.timelineThumbnail}
-                    resizeMode="cover"
-                  />
-                ) : item.type === 'video' && localUri ? (
-                  <Video
-                    source={{ uri: localUri }}
-                    style={styles.timelineThumbnail}
-                    resizeMode="cover"
-                    paused={true}
-                    repeat={false}
-                  />
-                ) : item.type === 'image' && (thumbnailUri || localUri) ? (
-                  <Image
-                    source={{ uri: thumbnailUri || localUri }}
-                    style={styles.timelineThumbnail}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <AppIcon
-                    name={item.type === 'video' ? 'film-outline' : 'image-outline'}
-                    size={16}
-                    color={colors.textSecondary}
-                  />
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
+      {/* iOS Photos-style Timeline */}
+      <PhotosTimeline
+        segments={segments}
+        totalDuration={totalDuration}
+        currentTime={currentTime}
+        isPlaying={isPlaying}
+        selectedClipId={selectedClipId}
+        onClipSelect={setSelectedClipId}
+        onSeek={handleTimelineSeek}
+        onTogglePlay={togglePlayPause}
+        onTrim={handleTrimClip}
+        timelineScale={timelineScale}
+        colors={colors}
+      />
 
       {/* Tools Drawer */}
       <View style={[styles.toolsDrawer, { backgroundColor: colors.surface }]}>
@@ -656,6 +831,491 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     </View>
   );
 };
+
+// ── iOS Photos-style Timeline ──────────────────────────────────────
+
+interface PhotosTimelineProps {
+  segments: TimelineSegment[];
+  totalDuration: number;
+  currentTime: number;
+  isPlaying: boolean;
+  selectedClipId: string | null;
+  onClipSelect: (id: string) => void;
+  onSeek: (time: number) => void;
+  onTogglePlay: () => void;
+  onTrim: (clipId: string, startTime: number, endTime: number) => void;
+  timelineScale: number;
+  colors: any;
+}
+
+const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
+  segments,
+  totalDuration,
+  currentTime,
+  isPlaying,
+  selectedClipId,
+  onClipSelect,
+  onSeek,
+  onTogglePlay,
+  onTrim,
+  timelineScale,
+  colors,
+}) => {
+  const timelineScrollRef = useAnimatedRef<any>();
+  const scrollOffset = useSharedValue(0);
+  const playheadTime = useSharedValue(currentTime);
+  const isPlayingShared = useSharedValue(isPlaying);
+  const totalDurationShared = useSharedValue(totalDuration);
+  const totalContentWidthShared = useSharedValue(0);
+  const trackViewportWidthShared = useSharedValue(0);
+  const pixelsPerSecond = useMemo(
+    () => PIXELS_PER_SECOND * timelineScale,
+    [timelineScale],
+  );
+
+  const totalContentWidth = useMemo(() => {
+    return segments.reduce(
+      (sum, seg) => sum + seg.duration * pixelsPerSecond,
+      0,
+    );
+  }, [segments, pixelsPerSecond]);
+
+  const handleTrackTap = useCallback(
+    (contentX: number) => {
+      if (totalContentWidth <= 0 || totalDuration <= 0) return;
+      const time = (contentX / totalContentWidth) * totalDuration;
+      onSeek(Math.max(0, Math.min(totalDuration, time)));
+    },
+    [totalContentWidth, totalDuration, onSeek],
+  );
+
+  const handleClipPress = useCallback(
+    (segment: TimelineSegment) => {
+      onClipSelect(segment.clip.id);
+      onSeek(segment.start);
+    },
+    [onClipSelect, onSeek],
+  );
+
+  useEffect(() => {
+    if (!isPlaying) {
+      playheadTime.value = currentTime;
+      return;
+    }
+
+    const drift = currentTime - playheadTime.value;
+    if (Math.abs(drift) > 0.25) {
+      playheadTime.value = currentTime;
+      return;
+    }
+
+    if (drift > 0) {
+      playheadTime.value = currentTime;
+    }
+  }, [currentTime, isPlaying, playheadTime]);
+
+  useEffect(() => {
+    isPlayingShared.value = isPlaying;
+  }, [isPlaying, isPlayingShared]);
+
+  useEffect(() => {
+    totalDurationShared.value = totalDuration;
+  }, [totalDuration, totalDurationShared]);
+
+  useEffect(() => {
+    totalContentWidthShared.value = totalContentWidth;
+  }, [totalContentWidth, totalContentWidthShared]);
+
+  const handleTrackLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      trackViewportWidthShared.value = event.nativeEvent.layout.width;
+    },
+    [trackViewportWidthShared],
+  );
+
+  useFrameCallback(({ timeSincePreviousFrame }) => {
+    if (!isPlayingShared.value) return;
+    if (totalDurationShared.value <= 0) return;
+    const dtMs = timeSincePreviousFrame ?? 0;
+    if (dtMs <= 0) return;
+
+    const next = playheadTime.value + dtMs / 1000;
+    playheadTime.value = Math.min(totalDurationShared.value, next);
+  }, true);
+
+  useAnimatedReaction(
+    () => {
+      if (totalDurationShared.value <= 0) return null;
+      if (totalContentWidthShared.value <= 0) return null;
+      if (trackViewportWidthShared.value <= 0) return null;
+
+      const playheadX =
+        (playheadTime.value / totalDurationShared.value) *
+        totalContentWidthShared.value;
+      const maxOffset = Math.max(
+        0,
+        totalContentWidthShared.value - trackViewportWidthShared.value,
+      );
+      return Math.max(
+        0,
+        Math.min(maxOffset, playheadX - trackViewportWidthShared.value / 2),
+      );
+    },
+    (targetOffset, prevOffset) => {
+      if (targetOffset == null) return;
+      if (
+        prevOffset != null &&
+        Math.abs(targetOffset - prevOffset) < 0.5
+      ) {
+        return;
+      }
+
+      scrollOffset.value = targetOffset;
+      scrollTo(timelineScrollRef, targetOffset, 0, false);
+    },
+  );
+
+  const playheadAnimatedStyle = useAnimatedStyle(() => {
+    if (totalDurationShared.value <= 0 || totalContentWidthShared.value <= 0) {
+      return { transform: [{ translateX: 0 }] };
+    }
+    const x =
+      (playheadTime.value / totalDurationShared.value) *
+      totalContentWidthShared.value;
+    return { transform: [{ translateX: x }] };
+  });
+
+  const trackTapGesture = Gesture.Tap().onEnd(e => {
+    runOnJS(handleTrackTap)(e.x + scrollOffset.value);
+  });
+
+  return (
+    <View style={[tlStyles.container, { backgroundColor: colors.surface }]}>
+      {/* Play button */}
+      <TouchableOpacity
+        onPress={onTogglePlay}
+        style={[tlStyles.playButton, { backgroundColor: colors.border }]}
+        accessibilityRole="button"
+        accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+      >
+        <AppIcon
+          name={isPlaying ? 'pause' : 'play'}
+          size={20}
+          color={colors.textPrimary}
+        />
+      </TouchableOpacity>
+
+      {/* Timeline track */}
+      <View style={tlStyles.trackOuter} onLayout={handleTrackLayout}>
+        <GestureDetector gesture={trackTapGesture}>
+          <Animated.ScrollView
+            ref={timelineScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={tlStyles.trackScroll}
+            contentContainerStyle={{ minWidth: '100%' }}
+            scrollEventThrottle={16}
+            onScroll={event => {
+              scrollOffset.value = event.nativeEvent.contentOffset.x;
+            }}
+          >
+            <View style={[tlStyles.trackInner, { width: Math.max(totalContentWidth, 1) }]}>
+              {segments.map(seg => {
+                const isSelected = selectedClipId === seg.clip.id;
+                const clipPixelWidth = seg.duration * pixelsPerSecond;
+
+                return (
+                  <TimelineClipItem
+                    key={seg.clip.id}
+                    clip={seg.clip}
+                    width={clipPixelWidth}
+                    isSelected={isSelected}
+                    onSelect={() => handleClipPress(seg)}
+                    onTrim={onTrim}
+                    pixelsPerSecond={pixelsPerSecond}
+                    colors={colors}
+                  />
+                );
+              })}
+
+              {/* Playhead */}
+              <Animated.View
+                pointerEvents="none"
+                style={[tlStyles.playhead, playheadAnimatedStyle]}
+              >
+                <View style={tlStyles.playheadDot} />
+                <View style={tlStyles.playheadLine} />
+              </Animated.View>
+            </View>
+          </Animated.ScrollView>
+        </GestureDetector>
+      </View>
+    </View>
+  );
+};
+
+// ── Single timeline clip with trim handles ────────────────────────
+
+const TimelineClipItem: React.FC<{
+  clip: MediaClip;
+  width: number;
+  pixelsPerSecond: number;
+  isSelected: boolean;
+  onSelect: () => void;
+  onTrim: (clipId: string, startTime: number, endTime: number) => void;
+  colors: any;
+}> = ({
+  clip,
+  width,
+  pixelsPerSecond,
+  isSelected,
+  onSelect,
+  onTrim,
+  colors,
+}) => {
+  const thumbnailUri = clip.thumbnailUri
+    ? normalizeMediaUri(clip.thumbnailUri)
+    : null;
+  const localUri = normalizeMediaUri(clip.localUri);
+  const showThumbnailImage =
+    clip.type === 'video' && !!thumbnailUri && clip.thumbnailUri !== clip.localUri;
+
+  // Trim handle drag state
+  const leftDelta = useSharedValue(0);
+  const rightDelta = useSharedValue(0);
+  const trimStart = useSharedValue(clip.startTime);
+  const trimEnd = useSharedValue(clip.endTime);
+  const dragStart = useSharedValue(clip.startTime);
+  const dragEnd = useSharedValue(clip.endTime);
+
+  useEffect(() => {
+    trimStart.value = clip.startTime;
+    trimEnd.value = clip.endTime;
+    leftDelta.value = 0;
+    rightDelta.value = 0;
+  }, [clip.startTime, clip.endTime, trimStart, trimEnd, leftDelta, rightDelta]);
+
+  const commitTrim = useCallback(
+    (newStart: number, newEnd: number) => {
+      onTrim(clip.id, newStart, newEnd);
+    },
+    [clip.id, onTrim],
+  );
+
+  const leftPan = Gesture.Pan()
+    .onStart(() => {
+      dragStart.value = trimStart.value;
+      dragEnd.value = trimEnd.value;
+      rightDelta.value = 0;
+    })
+    .onUpdate(e => {
+      const proposedStart = dragStart.value + e.translationX / pixelsPerSecond;
+      const maxStart = dragEnd.value - MIN_CLIP_DURATION;
+      const clampedStart = Math.max(0, Math.min(maxStart, proposedStart));
+      leftDelta.value = clampedStart - dragStart.value;
+    })
+    .onFinalize(() => {
+      const nextStart = Math.max(
+        0,
+        Math.min(dragEnd.value - MIN_CLIP_DURATION, dragStart.value + leftDelta.value),
+      );
+      trimStart.value = nextStart;
+      runOnJS(commitTrim)(nextStart, trimEnd.value);
+    });
+
+  const rightPan = Gesture.Pan()
+    .onStart(() => {
+      dragStart.value = trimStart.value;
+      dragEnd.value = trimEnd.value;
+      leftDelta.value = 0;
+    })
+    .onUpdate(e => {
+      const proposedEnd = dragEnd.value + e.translationX / pixelsPerSecond;
+      const minEnd = dragStart.value + MIN_CLIP_DURATION;
+      const clampedEnd = Math.max(minEnd, Math.min(clip.duration, proposedEnd));
+      rightDelta.value = clampedEnd - dragEnd.value;
+    })
+    .onFinalize(() => {
+      const nextEnd = Math.max(
+        dragStart.value + MIN_CLIP_DURATION,
+        Math.min(clip.duration, dragEnd.value + rightDelta.value),
+      );
+      trimEnd.value = nextEnd;
+      runOnJS(commitTrim)(trimStart.value, nextEnd);
+    });
+
+  const clipAnimatedStyle = useAnimatedStyle(() => ({
+    width: Math.max(
+      1,
+      width +
+        (rightDelta.value - leftDelta.value) * pixelsPerSecond,
+    ),
+    transform: [{ translateX: leftDelta.value * pixelsPerSecond }],
+  }), [width, pixelsPerSecond]);
+
+  return (
+    <AnimatedTouchableOpacity
+      activeOpacity={0.9}
+      onPress={onSelect}
+      style={[
+        tlStyles.clipContainer,
+        clipAnimatedStyle,
+        {
+          borderColor: isSelected ? SELECTED_COLOR : 'transparent',
+          borderWidth: isSelected ? 3 : 0,
+          backgroundColor: colors.border,
+        },
+      ]}
+    >
+      {/* Thumbnail */}
+      {clip.type === 'video' && showThumbnailImage ? (
+        <Image
+          source={{ uri: thumbnailUri! }}
+          style={tlStyles.clipThumbnail}
+          resizeMode="cover"
+        />
+      ) : clip.type === 'image' && (thumbnailUri || localUri) ? (
+        <Image
+          source={{ uri: (thumbnailUri || localUri)! }}
+          style={tlStyles.clipThumbnail}
+          resizeMode="cover"
+        />
+      ) : clip.type === 'video' && localUri ? (
+        <Video
+          source={{ uri: localUri }}
+          style={tlStyles.clipThumbnail}
+          resizeMode="cover"
+          paused={true}
+          repeat={false}
+        />
+      ) : (
+        <View style={tlStyles.clipPlaceholder}>
+          <AppIcon
+            name={clip.type === 'video' ? 'film-outline' : 'image-outline'}
+            size={18}
+            color={colors.textSecondary}
+          />
+        </View>
+      )}
+
+      {/* Trim handles - only on selected clip */}
+      {isSelected && (
+        <>
+          <GestureDetector gesture={leftPan}>
+            <Animated.View style={tlStyles.trimHandleLeft}>
+              <AppIcon name="chevron-back" size={18} color="#000" />
+            </Animated.View>
+          </GestureDetector>
+          <GestureDetector gesture={rightPan}>
+            <Animated.View style={tlStyles.trimHandleRight}>
+              <AppIcon name="chevron-forward" size={18} color="#000" />
+            </Animated.View>
+          </GestureDetector>
+        </>
+      )}
+    </AnimatedTouchableOpacity>
+  );
+};
+
+// ── Timeline styles ───────────────────────────────────────────────
+
+const tlStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.sm,
+    paddingLeft: SPACING.sm,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.1)',
+  },
+  playButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: SPACING.sm,
+  },
+  trackOuter: {
+    flex: 1,
+    height: TIMELINE_CLIP_HEIGHT + 16,
+    justifyContent: 'center',
+  },
+  trackScroll: {
+    flex: 1,
+  },
+  trackInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: TIMELINE_CLIP_HEIGHT,
+    position: 'relative',
+  },
+  clipContainer: {
+    height: TIMELINE_CLIP_HEIGHT,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginRight: 2,
+    position: 'relative',
+  },
+  clipThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  clipPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  trimHandleLeft: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: TRIM_HANDLE_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.85)',
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
+  },
+  trimHandleRight: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: TRIM_HANDLE_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.85)',
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+  },
+  playhead: {
+    position: 'absolute',
+    top: -6,
+    bottom: -6,
+    width: 2,
+    left: 0,
+    zIndex: 20,
+    elevation: 20,
+    alignItems: 'center',
+    marginLeft: -1,
+  },
+  playheadDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: PLAYHEAD_COLOR,
+    marginTop: -2,
+  },
+  playheadLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: PLAYHEAD_COLOR,
+  },
+});
+
+// ── Editor Canvas ─────────────────────────────────────────────────
 
 const EditorCanvas: React.FC<{
   layout: LayoutConfig;
@@ -805,61 +1465,57 @@ const GridCell: React.FC<{
   );
 };
 
-const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => {
+const PlaybackPreview: React.FC<{
+  activeSegment: TimelineSegment | null;
+  isPlaying: boolean;
+  soundEnabled: boolean;
+  videoRef: React.RefObject<VideoRef | null>;
+  onVideoLoad: () => void;
+  onVideoProgress: (clipId: string, data: OnProgressData) => void;
+  selectedClip: MediaClip | null;
+}> = ({
+  activeSegment,
+  isPlaying,
+  soundEnabled,
+  videoRef,
+  onVideoLoad,
+  onVideoProgress,
+  selectedClip,
+}) => {
   const { colors } = useTheme();
-  const soundEnabled = usePreferencesStore(state => state.soundEnabled);
-  const [isPlaying, setIsPlaying] = useState(false);
 
-  useEffect(() => {
-    setIsPlaying(false);
-  }, [clip?.id]);
+  // Show activeSegment clip during playback, otherwise show selected clip
+  const displayClip = activeSegment?.clip ?? selectedClip;
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.9}
-      onPress={() => {
-        if (clip?.type === 'video') {
-          setIsPlaying(p => !p);
-        }
-      }}
-      style={[styles.previewContainer, { backgroundColor: '#000000' }]}
-      accessibilityRole={clip?.type === 'video' ? 'button' : undefined}
-      accessibilityLabel={
-        clip?.type === 'video' ? 'Play or pause preview' : undefined
-      }
-    >
-      {clip ? (
+    <View style={[styles.previewContainer, { backgroundColor: '#000000' }]}>
+      {displayClip ? (
         <>
-          {clip.type === 'video' ? (
+          {displayClip.type === 'video' ? (
             <Video
-              source={{ uri: normalizeMediaUri(clip.localUri) }}
+              key={displayClip.id}
+              ref={activeSegment?.clip.id === displayClip.id ? videoRef : undefined}
+              source={{ uri: normalizeMediaUri(displayClip.localUri) }}
               style={styles.previewMedia}
               resizeMode="contain"
               paused={!isPlaying}
-              repeat={true}
+              repeat={false}
               muted={!soundEnabled}
+              progressUpdateInterval={33}
+              onLoad={onVideoLoad}
+              onProgress={data => onVideoProgress(displayClip.id, data)}
             />
           ) : (
             <Image
-              source={{ uri: normalizeMediaUri(clip.localUri) }}
+              key={displayClip.id}
+              source={{ uri: normalizeMediaUri(displayClip.localUri) }}
               style={styles.previewMedia}
               resizeMode="contain"
             />
           )}
-          {clip.type === 'video' && (
+          {displayClip.type === 'video' && (
             <View style={styles.previewVideoBadge}>
               <Text style={styles.previewVideoBadgeText}>VIDEO</Text>
-            </View>
-          )}
-          {clip.type === 'video' && (
-            <View style={styles.previewPlayOverlay} pointerEvents="none">
-              <View style={styles.previewPlayButton}>
-                <AppIcon
-                  name={isPlaying ? 'pause' : 'play'}
-                  size={20}
-                  color="#FFFFFF"
-                />
-              </View>
             </View>
           )}
         </>
@@ -872,7 +1528,7 @@ const SelectedClipPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => 
           </Text>
         </View>
       )}
-    </TouchableOpacity>
+    </View>
   );
 };
 
@@ -937,9 +1593,6 @@ const styles = StyleSheet.create({
   backButton: {
     padding: SPACING.sm,
   },
-  projectName: {
-    ...TYPOGRAPHY.h3,
-  },
   exportButton: {
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
@@ -975,10 +1628,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  undoRedoIcon: {
-    fontSize: 18,
-    fontWeight: '700',
-  },
   assetsContainer: {
     flex: 1,
     paddingHorizontal: SPACING.lg,
@@ -1007,7 +1656,6 @@ const styles = StyleSheet.create({
   assetsAccordionSubtitle: {
     ...TYPOGRAPHY.small,
   },
-  assetsAccordionChevron: {},
   assetsContent: {
     flex: 1,
     marginTop: SPACING.md,
@@ -1061,18 +1709,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: SPACING.sm,
   },
-  timelineControlButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  timelineScaleButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  timelineControlIcon: {
-    fontSize: 20,
+  timelineScaleButtonText: {
+    fontSize: 22,
     fontWeight: '700',
-    lineHeight: 20,
+    lineHeight: 22,
   },
   removeButton: {
     width: 40,
@@ -1080,31 +1728,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  removeButtonIcon: {},
-  timelineContainer: {
-    height: 100,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.1)',
-  },
-  timelineLabel: {
-    ...TYPOGRAPHY.caption,
-    marginBottom: SPACING.sm,
-  },
-  timelineClip: {
-    width: 60,
-    height: 40,
-    borderRadius: 4,
-    marginRight: SPACING.sm,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  timelineThumbnail: {
-    width: '100%',
-    height: '100%',
   },
   previewContainer: {
     flex: 1,
@@ -1145,23 +1768,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.5,
-  },
-  previewPlayOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  previewPlayButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   toolsDrawer: {
     height: 200,

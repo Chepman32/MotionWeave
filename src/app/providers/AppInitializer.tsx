@@ -138,7 +138,7 @@ export const AppInitializer: React.FC<AppInitializerProps> = ({ children }) => {
         const { useProjectStore } = await import(
           '../../entities/project/store'
         );
-        await useProjectStore.getState().loadProjects();
+        await useProjectStore.getState().hydrate();
         console.log('✓ Projects loaded');
       } catch (projectError) {
         console.warn('Project loading failed:', projectError);
