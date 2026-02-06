@@ -101,17 +101,11 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 
   const handlePickMedia = async () => {
     if (!project) return;
-    
+
     try {
       setIsImporting(true);
-      const availableSlots = maxItems - project.videos.length;
-      
-      if (availableSlots <= 0) {
-        Alert.alert('Grid Full', `Maximum ${maxItems} items allowed.`);
-        return;
-      }
-      
-      const media = await VideoImportService.pickMedia(availableSlots);
+
+      const media = await VideoImportService.pickMedia();
       
       if (media.length === 0) {
         return; // User cancelled
@@ -256,10 +250,6 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     );
   }
 
-  const maxItems =
-    project.layout.type === 'grid'
-      ? (project.layout.rows || 2) * (project.layout.cols || 2)
-      : 10;
 
   const selectedClip = selectedClipId
     ? project.videos.find(v => v.id === selectedClipId) || null
@@ -443,7 +433,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
                 { color: colors.textSecondary },
               ]}
             >
-              {project.videos.length}/{maxItems} ·{' '}
+              {project.videos.length} assets ·{' '}
               {isAssetsExpanded ? 'Preview' : 'Grid'}
             </Text>
           </View>
@@ -682,7 +672,12 @@ const EditorCanvas: React.FC<{
 }) => {
   if (layout.type === 'grid' && layout.rows && layout.cols) {
     const cells = [];
-    const cellCount = layout.rows * layout.cols;
+    // Calculate dynamic rows based on media count (minimum of layout.rows)
+    const cols = layout.cols || 2;
+    const minRows = layout.rows || 2;
+    const neededRows = Math.ceil((media.length + 1) / cols); // +1 for add button
+    const actualRows = Math.max(minRows, neededRows);
+    const cellCount = actualRows * cols;
 
     for (let i = 0; i < cellCount; i++) {
       const cellMedia = media.find(
@@ -703,21 +698,13 @@ const EditorCanvas: React.FC<{
     }
 
     return (
-      <View
-        style={[
-          styles.canvas,
-          {
-            aspectRatio:
-              layout.aspectRatio === '1:1'
-                ? 1
-                : layout.aspectRatio === '16:9'
-                ? 16 / 9
-                : 9 / 16,
-          },
-        ]}
+      <ScrollView
+        style={styles.canvas}
+        contentContainerStyle={styles.canvasContent}
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.gridContainer}>{cells}</View>
-      </View>
+      </ScrollView>
     );
   }
 
@@ -1038,11 +1025,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   canvas: {
+    flex: 1,
     width: '100%',
     maxWidth: SCREEN_WIDTH - SPACING.lg * 2,
   },
+  canvasContent: {
+    flexGrow: 1,
+  },
   gridContainer: {
-    flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
