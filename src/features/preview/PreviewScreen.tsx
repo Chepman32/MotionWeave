@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,8 +7,9 @@ import {
   Dimensions,
   StatusBar,
   Image,
+  LayoutChangeEvent,
 } from 'react-native';
-import Video from 'react-native-video';
+import Video, { VideoRef, OnProgressData, OnLoadData } from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -40,7 +41,24 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   const insets = useSafeAreaInsets();
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const controlsOpacity = useSharedValue(1);
+  const videoRef = useRef<VideoRef>(null);
+
+  const handleProgress = (data: OnProgressData) => {
+    setCurrentTime(data.currentTime);
+  };
+
+  const handleLoad = (data: OnLoadData) => {
+    setDuration(data.duration);
+  };
+
+  const handleSeek = (time: number) => {
+    const clampedTime = Math.max(0, Math.min(duration, time));
+    videoRef.current?.seek(clampedTime);
+    setCurrentTime(clampedTime);
+  };
 
   const toggleControls = () => {
     const newValue = showControls ? 0 : 1;
@@ -71,6 +89,9 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
             clips={project.videos}
             isPlaying={isPlaying}
             soundEnabled={soundEnabled}
+            videoRef={videoRef}
+            onProgress={handleProgress}
+            onLoad={handleLoad}
           />
         </View>
       </GestureDetector>
@@ -104,6 +125,11 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
           controlsStyle,
         ]}
       >
+        <PlaybackTimeline
+          currentTime={currentTime}
+          duration={duration}
+          onSeek={handleSeek}
+        />
         <TouchableOpacity onPress={togglePlayPause} style={styles.playButton}>
           <AppIcon
             name={isPlaying ? 'pause' : 'play'}
@@ -138,7 +164,10 @@ const CompositionPreview: React.FC<{
   clips: MediaClip[];
   isPlaying: boolean;
   soundEnabled: boolean;
-}> = ({ layout, clips, isPlaying, soundEnabled }) => {
+  videoRef?: React.RefObject<VideoRef | null>;
+  onProgress?: (data: OnProgressData) => void;
+  onLoad?: (data: OnLoadData) => void;
+}> = ({ layout, clips, isPlaying, soundEnabled, videoRef, onProgress, onLoad }) => {
   // For preview, show the first clip fullscreen
   const first = clips[0] ?? null;
 
@@ -155,12 +184,15 @@ const CompositionPreview: React.FC<{
     <View style={styles.fullscreenPreview}>
       {first.type === 'video' ? (
         <Video
+          ref={videoRef}
           source={{ uri: normalizeMediaUri(first.localUri) }}
           style={styles.fullscreenMedia}
           resizeMode="cover"
           paused={!isPlaying}
           repeat={true}
           muted={!soundEnabled}
+          onProgress={onProgress}
+          onLoad={onLoad}
         />
       ) : (
         <Image
@@ -172,6 +204,77 @@ const CompositionPreview: React.FC<{
     </View>
   );
 
+};
+
+const formatTime = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+interface PlaybackTimelineProps {
+  currentTime: number;
+  duration: number;
+  onSeek: (time: number) => void;
+}
+
+const PlaybackTimeline: React.FC<PlaybackTimelineProps> = ({
+  currentTime,
+  duration,
+  onSeek,
+}) => {
+  const [timelineWidth, setTimelineWidth] = useState(0);
+  const seekPosition = useSharedValue(0);
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    setTimelineWidth(event.nativeEvent.layout.width);
+  };
+
+  const handleSeekFromPosition = (x: number) => {
+    if (timelineWidth > 0 && duration > 0) {
+      const seekTime = (x / timelineWidth) * duration;
+      onSeek(seekTime);
+    }
+  };
+
+  const panGesture = Gesture.Pan()
+    .onStart((e) => {
+      seekPosition.value = e.x;
+    })
+    .onUpdate((e) => {
+      seekPosition.value = Math.max(0, Math.min(timelineWidth, e.x));
+      runOnJS(handleSeekFromPosition)(seekPosition.value);
+    })
+    .onEnd(() => {
+      seekPosition.value = 0;
+    });
+
+  const tapGesture = Gesture.Tap()
+    .onEnd((e) => {
+      runOnJS(handleSeekFromPosition)(e.x);
+    });
+
+  const composedGesture = Gesture.Race(panGesture, tapGesture);
+
+  const playheadStyle = useAnimatedStyle(() => ({
+    left: `${progress}%`,
+  }));
+
+  return (
+    <View style={styles.timelineContainer}>
+      <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
+      <GestureDetector gesture={composedGesture}>
+        <View style={styles.timelineTrack} onLayout={handleLayout}>
+          <View style={styles.timelineBackground} />
+          <View style={[styles.timelineProgress, { width: `${progress}%` }]} />
+          <Animated.View style={[styles.playhead, playheadStyle]} />
+        </View>
+      </GestureDetector>
+      <Text style={styles.timeText}>{formatTime(duration)}</Text>
+    </View>
+  );
 };
 
 const styles = StyleSheet.create({
@@ -273,5 +376,51 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.body,
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  timelineContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    marginBottom: SPACING.md,
+    gap: SPACING.sm,
+  },
+  timelineTrack: {
+    flex: 1,
+    height: 44,
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  timelineBackground: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 20,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+  },
+  timelineProgress: {
+    position: 'absolute',
+    left: 0,
+    top: 20,
+    height: 4,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 2,
+  },
+  playhead: {
+    position: 'absolute',
+    top: 15,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    marginLeft: -7,
+  },
+  timeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '500',
+    minWidth: 40,
+    textAlign: 'center',
   },
 });
