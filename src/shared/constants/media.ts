@@ -1,0 +1,2 @@
+export const DEFAULT_IMAGE_DURATION_SECONDS = 3;
+

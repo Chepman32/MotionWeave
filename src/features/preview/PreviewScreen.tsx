@@ -1,15 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
   StatusBar,
   Image,
   LayoutChangeEvent,
 } from 'react-native';
-import Video, { VideoRef, OnProgressData, OnLoadData } from 'react-native-video';
+import Video, { VideoRef, OnProgressData } from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -21,44 +20,130 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 import { AppIcon } from '../../shared/components/AppIcon';
-import { LayoutConfig, MediaClip, Project } from '../../shared/types';
+import { MediaClip, Project } from '../../shared/types';
 import { normalizeMediaUri } from '../../shared/utils/helpers';
+import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
 
 interface PreviewScreenProps {
   project: Project;
   onBack: () => void;
   onExport?: () => void;
   soundEnabled?: boolean;
+  isVisible?: boolean;
 }
+
+const getClipEffectiveDurationSeconds = (clip: MediaClip): number => {
+  if (clip.type === 'image') {
+    return clip.duration > 0 ? clip.duration : DEFAULT_IMAGE_DURATION_SECONDS;
+  }
+
+  const trimmedDuration = clip.endTime - clip.startTime;
+  if (trimmedDuration > 0) return trimmedDuration;
+  return clip.duration > 0 ? clip.duration : 0;
+};
+
+type TimelineSegment = {
+  clip: MediaClip;
+  start: number;
+  end: number;
+  duration: number;
+};
 
 export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   project,
   onBack,
   onExport,
   soundEnabled = true,
+  isVisible = true,
 }) => {
   const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [showControls, setShowControls] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const controlsOpacity = useSharedValue(1);
   const videoRef = useRef<VideoRef>(null);
+  const currentTimeRef = useRef(0);
+  const activeClipIdRef = useRef<string | null>(null);
+  const activeSegmentRef = useRef<TimelineSegment | null>(null);
+  const pendingSeekRef = useRef<{ clipId: string; time: number } | null>(null);
+  const didAutoAdvanceRef = useRef<string | null>(null);
 
-  const handleProgress = (data: OnProgressData) => {
-    setCurrentTime(data.currentTime);
-  };
+  const segments = useMemo(() => {
+    let t = 0;
+    const next: TimelineSegment[] = [];
 
-  const handleLoad = (data: OnLoadData) => {
-    setDuration(data.duration);
-  };
+    project.videos.forEach(clip => {
+      const segDuration = getClipEffectiveDurationSeconds(clip);
+      const start = t;
+      const end = start + segDuration;
+      t = end;
 
-  const handleSeek = (time: number) => {
-    const clampedTime = Math.max(0, Math.min(duration, time));
-    videoRef.current?.seek(clampedTime);
-    setCurrentTime(clampedTime);
-  };
+      next.push({
+        clip,
+        start,
+        end,
+        duration: segDuration,
+      });
+    });
+
+    return next;
+  }, [project.videos]);
+
+  const duration = useMemo(() => {
+    if (segments.length === 0) return 0;
+    return segments[segments.length - 1].end;
+  }, [segments]);
+
+  const getSegmentForTime = useCallback(
+    (time: number): { segment: TimelineSegment; localTime: number } | null => {
+      if (segments.length === 0 || duration <= 0) return null;
+
+      const clampedTime = Math.max(0, Math.min(duration, time));
+      const idx = segments.findIndex(seg => clampedTime < seg.end);
+      const segment = idx >= 0 ? segments[idx] : segments[segments.length - 1];
+      const localTime = Math.max(0, clampedTime - segment.start);
+      return { segment, localTime };
+    },
+    [duration, segments],
+  );
+
+  const active = useMemo(() => {
+    return getSegmentForTime(currentTime);
+  }, [currentTime, getSegmentForTime]);
+
+  const activeSegment = active?.segment ?? null;
+
+  const handleSeek = useCallback(
+    (time: number, options?: { resetAutoAdvance?: boolean }) => {
+      if (segments.length === 0 || duration <= 0) return;
+      const clampedTime = Math.max(0, Math.min(duration, time));
+
+      if (options?.resetAutoAdvance !== false) {
+        didAutoAdvanceRef.current = null;
+      }
+      setCurrentTime(clampedTime);
+
+      const next = getSegmentForTime(clampedTime);
+      if (!next) return;
+
+      if (next.segment.clip.type === 'video') {
+        const seekTo =
+          next.segment.clip.startTime +
+          Math.min(next.localTime, next.segment.duration);
+
+        pendingSeekRef.current = { clipId: next.segment.clip.id, time: seekTo };
+
+        if (activeClipIdRef.current === next.segment.clip.id) {
+          videoRef.current?.seek(seekTo);
+          pendingSeekRef.current = null;
+        }
+      } else {
+        pendingSeekRef.current = null;
+      }
+    },
+    [duration, getSegmentForTime, segments.length],
+  );
 
   const toggleControls = () => {
     const newValue = showControls ? 0 : 1;
@@ -67,7 +152,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   };
 
   const togglePlayPause = () => {
-    setIsPlaying(!isPlaying);
+    setIsPlaying(p => !p);
   };
 
   const tapGesture = Gesture.Tap().onEnd(() => {
@@ -78,21 +163,129 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
     opacity: controlsOpacity.value,
   }));
 
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
+  useEffect(() => {
+    if (!isVisible) {
+      setIsPlaying(false);
+      return;
+    }
+
+    // Autoplay from the beginning whenever the preview is shown.
+    handleSeek(0);
+    setIsPlaying(true);
+  }, [handleSeek, isVisible]);
+
+  useEffect(() => {
+    activeClipIdRef.current = activeSegment?.clip.id ?? null;
+    activeSegmentRef.current = activeSegment;
+    didAutoAdvanceRef.current = null;
+
+    if (!activeSegment || activeSegment.clip.type !== 'video') return;
+
+    const localTime = Math.max(0, currentTimeRef.current - activeSegment.start);
+    const seekTo =
+      activeSegment.clip.startTime +
+      Math.min(localTime, activeSegment.duration);
+
+    pendingSeekRef.current = { clipId: activeSegment.clip.id, time: seekTo };
+  }, [activeSegment]);
+
+  const handleVideoLoad = useCallback(() => {
+    const pending = pendingSeekRef.current;
+    const activeClipId = activeClipIdRef.current;
+    if (!pending || !activeClipId || pending.clipId !== activeClipId) return;
+
+    videoRef.current?.seek(pending.time);
+    pendingSeekRef.current = null;
+  }, []);
+
+  const handleVideoProgress = useCallback(
+    (clipId: string, data: OnProgressData) => {
+      if (!isPlaying) return;
+      if (clipId !== activeClipIdRef.current) return;
+
+      const seg = activeSegmentRef.current;
+      if (!seg || seg.clip.id !== clipId) return;
+
+      const localTime = Math.max(0, data.currentTime - seg.clip.startTime);
+      const clampedLocal = Math.min(localTime, seg.duration);
+      const globalTime = seg.start + clampedLocal;
+
+      setCurrentTime(globalTime);
+
+      if (seg.duration <= 0) return;
+      if (didAutoAdvanceRef.current === clipId) return;
+
+      if (clampedLocal >= seg.duration - 0.05) {
+        didAutoAdvanceRef.current = clipId;
+        handleSeek(seg.end >= duration ? 0 : seg.end, { resetAutoAdvance: false });
+      }
+    },
+    [duration, handleSeek, isPlaying],
+  );
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    if (!activeSegment) return;
+    if (activeSegment.clip.type !== 'image') return;
+    if (duration <= 0) return;
+
+    let last = Date.now();
+    const id = setInterval(() => {
+      const now = Date.now();
+      const dt = (now - last) / 1000;
+      last = now;
+
+      setCurrentTime(prev => {
+        const next = prev + dt;
+        if (next < duration) return next;
+        return duration > 0 ? next % duration : 0;
+      });
+    }, 250);
+
+    return () => clearInterval(id);
+  }, [activeSegment, duration, isPlaying]);
+
   return (
     <View style={[styles.container, { backgroundColor: '#000000' }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {/* Video Player Area */}
       <GestureDetector gesture={tapGesture}>
         <View style={styles.videoContainer}>
-          <CompositionPreview
-            layout={project.layout}
-            clips={project.videos}
-            isPlaying={isPlaying}
-            soundEnabled={soundEnabled}
-            videoRef={videoRef}
-            onProgress={handleProgress}
-            onLoad={handleLoad}
-          />
+          {activeSegment ? (
+            activeSegment.clip.type === 'video' ? (
+              <Video
+                key={activeSegment.clip.id}
+                ref={videoRef}
+                source={{ uri: normalizeMediaUri(activeSegment.clip.localUri) }}
+                style={styles.fullscreenMedia}
+                resizeMode="cover"
+                paused={!isPlaying}
+                repeat={false}
+                muted={!soundEnabled}
+                progressUpdateInterval={250}
+                onLoad={handleVideoLoad}
+                onProgress={data =>
+                  handleVideoProgress(activeSegment.clip.id, data)
+                }
+              />
+            ) : (
+              <Image
+                key={activeSegment.clip.id}
+                source={{ uri: normalizeMediaUri(activeSegment.clip.localUri) }}
+                style={styles.fullscreenMedia}
+                resizeMode="cover"
+              />
+            )
+          ) : (
+            <View style={styles.emptyComposition}>
+              <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
+              <Text style={styles.emptyText}>No media to preview</Text>
+            </View>
+          )}
         </View>
       </GestureDetector>
 
@@ -143,67 +336,6 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
       </Animated.View>
     </View>
   );
-};
-
-const getAspectRatio = (aspectRatio: LayoutConfig['aspectRatio']): number => {
-  switch (aspectRatio) {
-    case '16:9':
-      return 16 / 9;
-    case '9:16':
-      return 9 / 16;
-    case '4:3':
-      return 4 / 3;
-    case '1:1':
-    default:
-      return 1;
-  }
-};
-
-const CompositionPreview: React.FC<{
-  layout: LayoutConfig;
-  clips: MediaClip[];
-  isPlaying: boolean;
-  soundEnabled: boolean;
-  videoRef?: React.RefObject<VideoRef | null>;
-  onProgress?: (data: OnProgressData) => void;
-  onLoad?: (data: OnLoadData) => void;
-}> = ({ layout, clips, isPlaying, soundEnabled, videoRef, onProgress, onLoad }) => {
-  // For preview, show the first clip fullscreen
-  const first = clips[0] ?? null;
-
-  if (!first) {
-    return (
-      <View style={styles.emptyComposition}>
-        <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
-        <Text style={styles.emptyText}>No media to preview</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.fullscreenPreview}>
-      {first.type === 'video' ? (
-        <Video
-          ref={videoRef}
-          source={{ uri: normalizeMediaUri(first.localUri) }}
-          style={styles.fullscreenMedia}
-          resizeMode="cover"
-          paused={!isPlaying}
-          repeat={true}
-          muted={!soundEnabled}
-          onProgress={onProgress}
-          onLoad={onLoad}
-        />
-      ) : (
-        <Image
-          source={{ uri: normalizeMediaUri(first.localUri) }}
-          style={styles.fullscreenMedia}
-          resizeMode="cover"
-        />
-      )}
-    </View>
-  );
-
 };
 
 const formatTime = (seconds: number): string => {
@@ -322,6 +454,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: '#000000',
+  },
+  gridRow: {
+    flex: 1,
+    flexDirection: 'row',
   },
   fullscreenMedia: {
     flex: 1,

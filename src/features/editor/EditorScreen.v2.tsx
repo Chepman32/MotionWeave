@@ -33,6 +33,7 @@ import { AppIcon } from '../../shared/components/AppIcon';
 import { PreviewScreen } from '../preview/PreviewScreen';
 import { usePreferencesStore } from '../../shared/stores/preferencesStore';
 import { normalizeMediaUri } from '../../shared/utils/helpers';
+import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const AnimatedAppIcon = Animated.createAnimatedComponent(AppIcon);
@@ -116,27 +117,38 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
         return; // User cancelled
       }
 
-      const mediaClips: MediaClip[] = media.map((item, index) => ({
-        id: item.id,
-        localUri: item.localPath,
-        thumbnailUri: item.thumbnailPath,
-        type: item.type,
-        duration: item.duration,
-        startTime: 0,
-        endTime: item.duration,
-        position: {
-          row: Math.floor((project.videos.length + index) / (project.layout.cols || 2)),
-          col: (project.videos.length + index) % (project.layout.cols || 2),
-        },
-        transform: {
-          scale: 1,
-          translateX: 0,
-          translateY: 0,
-          rotation: 0,
-        },
-        filters: [],
-        volume: 1.0,
-      }));
+      const mediaClips: MediaClip[] = media.map((item, index) => {
+        const effectiveDuration =
+          item.type === 'image'
+            ? item.duration > 0
+              ? item.duration
+              : DEFAULT_IMAGE_DURATION_SECONDS
+            : item.duration;
+
+        return {
+          id: item.id,
+          localUri: item.localPath,
+          thumbnailUri: item.thumbnailPath,
+          type: item.type,
+          duration: effectiveDuration,
+          startTime: 0,
+          endTime: effectiveDuration,
+          position: {
+            row: Math.floor(
+              (project.videos.length + index) / (project.layout.cols || 2),
+            ),
+            col: (project.videos.length + index) % (project.layout.cols || 2),
+          },
+          transform: {
+            scale: 1,
+            translateX: 0,
+            translateY: 0,
+            rotation: 0,
+          },
+          filters: [],
+          volume: 1.0,
+        };
+      });
 
       const updatedProject = {
         ...project,
@@ -642,6 +654,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       >
         <PreviewScreen
           project={project}
+          isVisible={isPreviewVisible}
           onBack={() => setIsPreviewVisible(false)}
           onExport={() => {
             setIsPreviewVisible(false);

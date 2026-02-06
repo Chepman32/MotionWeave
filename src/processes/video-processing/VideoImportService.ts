@@ -2,6 +2,7 @@ import { launchImageLibrary, Asset } from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import { generateId } from '../../shared/utils/helpers';
 import { MediaType } from '../../shared/types';
+import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
 
 export interface ImportedMedia {
   id: string;
@@ -188,7 +189,10 @@ export class VideoImportService {
         localPath: finalUri,
         thumbnailPath,
         type: mediaType,
-        duration: asset.duration || 0,
+        duration:
+          mediaType === 'image'
+            ? DEFAULT_IMAGE_DURATION_SECONDS
+            : asset.duration || 0,
         width: asset.width || 0,
         height: asset.height || 0,
         size: fileSize,
