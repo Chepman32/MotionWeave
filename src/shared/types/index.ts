@@ -24,6 +24,7 @@ export interface MediaClip {
   endTime: number;
   position: GridPosition;
   transform: TransformConfig;
+  aspectRatio?: number;
   filters: FilterConfig[];
   volume: number;
 }
@@ -49,6 +50,7 @@ export interface TransformConfig {
   translateX: number;
   translateY: number;
   rotation: number;
+  resizeMode?: 'cover' | 'contain';
 }
 
 export interface FilterConfig {

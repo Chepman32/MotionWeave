@@ -1,5 +1,9 @@
 import RNFS from 'react-native-fs';
 import { LayoutConfig, MediaClip, FilterConfig } from '../../shared/types';
+import {
+  clampNormalizedPan,
+  getClipResizeMode,
+} from '../../shared/utils/mediaFraming';
 
 export interface ExportOptions {
   resolution: '720p' | '1080p' | '2k' | '4k';
@@ -137,11 +141,28 @@ export class FFmpegService {
         filters.push('setpts=PTS-STARTPTS');
       }
 
-      // Scale to cell size
-      filters.push(
-        `scale=${cellWidth}:${cellHeight}:force_original_aspect_ratio=increase`,
-      );
-      filters.push(`crop=${cellWidth}:${cellHeight}`);
+      const resizeMode = getClipResizeMode(clip);
+
+      if (resizeMode === 'contain') {
+        // Keep the full frame visible and letterbox/pillarbox inside the cell.
+        filters.push(
+          `scale=${cellWidth}:${cellHeight}:force_original_aspect_ratio=decrease`,
+        );
+        filters.push(`pad=${cellWidth}:${cellHeight}:(ow-iw)/2:(oh-ih)/2:black`);
+      } else {
+        // Fill the cell and crop with user-defined pan offsets.
+        const panX = clampNormalizedPan(clip.transform.translateX).toFixed(4);
+        const panY = clampNormalizedPan(clip.transform.translateY).toFixed(4);
+        const cropX =
+          `max(0,min(in_w-out_w,(in_w-out_w)/2+${panX}*(in_w-out_w)/2))`;
+        const cropY =
+          `max(0,min(in_h-out_h,(in_h-out_h)/2+${panY}*(in_h-out_h)/2))`;
+
+        filters.push(
+          `scale=${cellWidth}:${cellHeight}:force_original_aspect_ratio=increase`,
+        );
+        filters.push(`crop=${cellWidth}:${cellHeight}:${cropX}:${cropY}`);
+      }
 
       // Apply filters
       if (clip.filters && clip.filters.length > 0) {

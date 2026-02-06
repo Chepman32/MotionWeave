@@ -7,8 +7,9 @@ import {
   StatusBar,
   Image,
   LayoutChangeEvent,
+  Dimensions,
 } from 'react-native';
-import Video, { VideoRef, OnProgressData } from 'react-native-video';
+import Video, { VideoRef, OnProgressData, OnLoadData } from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -23,6 +24,13 @@ import { AppIcon } from '../../shared/components/AppIcon';
 import { MediaClip, Project } from '../../shared/types';
 import { normalizeMediaUri } from '../../shared/utils/helpers';
 import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
+import {
+  computeMediaFrame,
+  getClipResizeMode,
+  getClipPan,
+} from '../../shared/utils/mediaFraming';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface PreviewScreenProps {
   project: Project;
@@ -68,6 +76,11 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   const activeSegmentRef = useRef<TimelineSegment | null>(null);
   const pendingSeekRef = useRef<{ clipId: string; time: number } | null>(null);
   const didAutoAdvanceRef = useRef<string | null>(null);
+  const [containerSize, setContainerSize] = useState({
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+  });
+  const [mediaAspectRatio, setMediaAspectRatio] = useState(1);
 
   const segments = useMemo(() => {
     let t = 0;
@@ -113,6 +126,21 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   }, [currentTime, getSegmentForTime]);
 
   const activeSegment = active?.segment ?? null;
+  const activeClip = activeSegment?.clip ?? null;
+
+  const clipResizeMode = activeClip ? getClipResizeMode(activeClip) : 'cover';
+  const clipPan = activeClip ? getClipPan(activeClip) : { x: 0, y: 0 };
+
+  const mediaFrame = useMemo(
+    () =>
+      computeMediaFrame(
+        Math.max(containerSize.width, 1),
+        Math.max(containerSize.height, 1),
+        mediaAspectRatio,
+        clipResizeMode,
+      ),
+    [clipResizeMode, mediaAspectRatio, containerSize.width, containerSize.height],
+  );
 
   const handleSeek = useCallback(
     (time: number, options?: { resetAutoAdvance?: boolean }) => {
@@ -168,6 +196,46 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   }, [currentTime]);
 
   useEffect(() => {
+    if (!activeClip) {
+      setMediaAspectRatio(1);
+      return;
+    }
+
+    // Use cached aspect ratio if available
+    if (activeClip.aspectRatio) {
+      setMediaAspectRatio(activeClip.aspectRatio);
+      return;
+    }
+
+    // Fallback: detect aspect ratio for old clips without cached value
+    setMediaAspectRatio(1);
+
+    if (activeClip.type === 'image') {
+      const imageUri = normalizeMediaUri(activeClip.localUri);
+      let isCancelled = false;
+
+      Image.getSize(
+        imageUri,
+        (width, height) => {
+          if (isCancelled) return;
+          if (width > 0 && height > 0) {
+            setMediaAspectRatio(width / height);
+          }
+        },
+        () => {
+          if (!isCancelled) {
+            setMediaAspectRatio(1);
+          }
+        },
+      );
+
+      return () => {
+        isCancelled = true;
+      };
+    }
+  }, [activeClip?.id, activeClip?.aspectRatio]);
+
+  useEffect(() => {
     if (!isVisible) {
       setIsPlaying(false);
       return;
@@ -193,7 +261,13 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
     pendingSeekRef.current = { clipId: activeSegment.clip.id, time: seekTo };
   }, [activeSegment]);
 
-  const handleVideoLoad = useCallback(() => {
+  const handleVideoLoad = useCallback((data: OnLoadData) => {
+    const width = Number(data?.naturalSize?.width || 0);
+    const height = Number(data?.naturalSize?.height || 0);
+    if (width > 0 && height > 0) {
+      setMediaAspectRatio(width / height);
+    }
+
     const pending = pendingSeekRef.current;
     const activeClipId = activeClipIdRef.current;
     if (!pending || !activeClipId || pending.clipId !== activeClipId) return;
@@ -254,32 +328,57 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {/* Video Player Area */}
       <GestureDetector gesture={tapGesture}>
-        <View style={styles.videoContainer}>
-          {activeSegment ? (
-            activeSegment.clip.type === 'video' ? (
-              <Video
-                key={activeSegment.clip.id}
-                ref={videoRef}
-                source={{ uri: normalizeMediaUri(activeSegment.clip.localUri) }}
-                style={styles.fullscreenMedia}
-                resizeMode="cover"
-                paused={!isPlaying}
-                repeat={false}
-                muted={!soundEnabled}
-                progressUpdateInterval={250}
-                onLoad={handleVideoLoad}
-                onProgress={data =>
-                  handleVideoProgress(activeSegment.clip.id, data)
-                }
-              />
-            ) : (
-              <Image
-                key={activeSegment.clip.id}
-                source={{ uri: normalizeMediaUri(activeSegment.clip.localUri) }}
-                style={styles.fullscreenMedia}
-                resizeMode="cover"
-              />
-            )
+        <View
+          style={styles.videoContainer}
+          onLayout={(event) => {
+            const { width, height } = event.nativeEvent.layout;
+            if (width > 0 && height > 0) {
+              setContainerSize({ width, height });
+            }
+          }}
+        >
+          {activeClip ? (
+            <View
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                width: mediaFrame.width,
+                height: mediaFrame.height,
+                marginLeft: -mediaFrame.width / 2,
+                marginTop: -mediaFrame.height / 2,
+                overflow: 'hidden',
+                transform: [
+                  { translateX: clipPan.x * mediaFrame.maxPanX },
+                  { translateY: clipPan.y * mediaFrame.maxPanY },
+                ],
+              }}
+            >
+              {activeClip.type === 'video' ? (
+                <Video
+                  key={activeClip.id}
+                  ref={videoRef}
+                  source={{ uri: normalizeMediaUri(activeClip.localUri) }}
+                  style={styles.fullscreenMedia}
+                  resizeMode="stretch"
+                  paused={!isPlaying}
+                  repeat={false}
+                  muted={!soundEnabled}
+                  progressUpdateInterval={250}
+                  onLoad={handleVideoLoad}
+                  onProgress={data =>
+                    handleVideoProgress(activeClip.id, data)
+                  }
+                />
+              ) : (
+                <Image
+                  key={activeClip.id}
+                  source={{ uri: normalizeMediaUri(activeClip.localUri) }}
+                  style={styles.fullscreenMedia}
+                  resizeMode="stretch"
+                />
+              )}
+            </View>
           ) : (
             <View style={styles.emptyComposition}>
               <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
@@ -417,6 +516,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   composition: {
     backgroundColor: '#000000',
@@ -460,9 +560,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   fullscreenMedia: {
-    flex: 1,
     width: '100%',
     height: '100%',
+    backgroundColor: '#000',
   },
   emptyText: {
     color: '#FFFFFF',
