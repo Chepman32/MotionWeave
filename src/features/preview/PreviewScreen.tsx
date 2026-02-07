@@ -32,12 +32,32 @@ import {
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+const getLayoutAspectRatioValue = (
+  aspectRatio: Project['layout']['aspectRatio'],
+  fallback: number,
+): number => {
+  switch (aspectRatio) {
+    case '16:9':
+      return 16 / 9;
+    case '9:16':
+      return 9 / 16;
+    case '1:1':
+      return 1;
+    case '4:3':
+      return 4 / 3;
+    case 'custom':
+    default:
+      return fallback > 0 && Number.isFinite(fallback) ? fallback : 1;
+  }
+};
+
 interface PreviewScreenProps {
   project: Project;
   onBack: () => void;
   onExport?: () => void;
   soundEnabled?: boolean;
   isVisible?: boolean;
+  clipViewportAspectRatios?: Record<string, number>;
 }
 
 const getClipEffectiveDurationSeconds = (clip: MediaClip): number => {
@@ -63,6 +83,7 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   onExport,
   soundEnabled = true,
   isVisible = true,
+  clipViewportAspectRatios,
 }) => {
   const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
@@ -127,19 +148,69 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
 
   const activeSegment = active?.segment ?? null;
   const activeClip = activeSegment?.clip ?? null;
-
   const clipResizeMode = activeClip ? getClipResizeMode(activeClip) : 'cover';
   const clipPan = activeClip ? getClipPan(activeClip) : { x: 0, y: 0 };
+  const activeClipViewportAspectRatio = useMemo(() => {
+    if (!activeClip) return null;
+
+    const ratio = clipViewportAspectRatios?.[activeClip.id];
+    if (!ratio || !Number.isFinite(ratio) || ratio <= 0) {
+      return null;
+    }
+    return ratio;
+  }, [activeClip, clipViewportAspectRatios]);
+
+  const compositionAspectRatio = useMemo(() => {
+    const fallbackAspectRatio =
+      containerSize.height > 0 ? containerSize.width / containerSize.height : 1;
+
+    if (clipResizeMode === 'contain') {
+      // Fit mode should use fullscreen viewport to avoid tiny media in Preview.
+      return fallbackAspectRatio;
+    }
+
+    if (activeClipViewportAspectRatio) {
+      return activeClipViewportAspectRatio;
+    }
+
+    return getLayoutAspectRatioValue(
+      project.layout.aspectRatio,
+      fallbackAspectRatio,
+    );
+  }, [
+    activeClipViewportAspectRatio,
+    clipResizeMode,
+    containerSize.height,
+    containerSize.width,
+    project.layout.aspectRatio,
+  ]);
+
+  const compositionSize = useMemo(() => {
+    const maxWidth = Math.max(containerSize.width, 1);
+    const maxHeight = Math.max(containerSize.height, 1);
+
+    if (maxWidth / maxHeight > compositionAspectRatio) {
+      return {
+        width: maxHeight * compositionAspectRatio,
+        height: maxHeight,
+      };
+    }
+
+    return {
+      width: maxWidth,
+      height: maxWidth / compositionAspectRatio,
+    };
+  }, [compositionAspectRatio, containerSize.height, containerSize.width]);
 
   const mediaFrame = useMemo(
     () =>
       computeMediaFrame(
-        Math.max(containerSize.width, 1),
-        Math.max(containerSize.height, 1),
+        Math.max(compositionSize.width, 1),
+        Math.max(compositionSize.height, 1),
         mediaAspectRatio,
         clipResizeMode,
       ),
-    [clipResizeMode, mediaAspectRatio, containerSize.width, containerSize.height],
+    [clipResizeMode, mediaAspectRatio, compositionSize.height, compositionSize.width],
   );
 
   const handleSeek = useCallback(
@@ -337,54 +408,64 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
             }
           }}
         >
-          {activeClip ? (
-            <View
-              style={{
-                position: 'absolute',
-                left: '50%',
-                top: '50%',
-                width: mediaFrame.width,
-                height: mediaFrame.height,
-                marginLeft: -mediaFrame.width / 2,
-                marginTop: -mediaFrame.height / 2,
-                overflow: 'hidden',
-                transform: [
-                  { translateX: clipPan.x * mediaFrame.maxPanX },
-                  { translateY: clipPan.y * mediaFrame.maxPanY },
-                ],
-              }}
-            >
-              {activeClip.type === 'video' ? (
-                <Video
-                  key={activeClip.id}
-                  ref={videoRef}
-                  source={{ uri: normalizeMediaUri(activeClip.localUri) }}
-                  style={styles.fullscreenMedia}
-                  resizeMode="stretch"
-                  paused={!isPlaying}
-                  repeat={false}
-                  muted={!soundEnabled}
-                  progressUpdateInterval={250}
-                  onLoad={handleVideoLoad}
-                  onProgress={data =>
-                    handleVideoProgress(activeClip.id, data)
-                  }
-                />
-              ) : (
-                <Image
-                  key={activeClip.id}
-                  source={{ uri: normalizeMediaUri(activeClip.localUri) }}
-                  style={styles.fullscreenMedia}
-                  resizeMode="stretch"
-                />
-              )}
-            </View>
-          ) : (
-            <View style={styles.emptyComposition}>
-              <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
-              <Text style={styles.emptyText}>No media to preview</Text>
-            </View>
-          )}
+          <View
+            style={[
+              styles.compositionFrame,
+              {
+                width: compositionSize.width,
+                height: compositionSize.height,
+              },
+            ]}
+          >
+            {activeClip ? (
+              <View
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  width: mediaFrame.width,
+                  height: mediaFrame.height,
+                  marginLeft: -mediaFrame.width / 2,
+                  marginTop: -mediaFrame.height / 2,
+                  overflow: 'hidden',
+                  transform: [
+                    { translateX: clipPan.x * mediaFrame.maxPanX },
+                    { translateY: clipPan.y * mediaFrame.maxPanY },
+                  ],
+                }}
+              >
+                {activeClip.type === 'video' ? (
+                  <Video
+                    key={activeClip.id}
+                    ref={videoRef}
+                    source={{ uri: normalizeMediaUri(activeClip.localUri) }}
+                    style={styles.fullscreenMedia}
+                    resizeMode="stretch"
+                    paused={!isPlaying}
+                    repeat={false}
+                    muted={!soundEnabled}
+                    progressUpdateInterval={250}
+                    onLoad={handleVideoLoad}
+                    onProgress={data =>
+                      handleVideoProgress(activeClip.id, data)
+                    }
+                  />
+                ) : (
+                  <Image
+                    key={activeClip.id}
+                    source={{ uri: normalizeMediaUri(activeClip.localUri) }}
+                    style={styles.fullscreenMedia}
+                    resizeMode="stretch"
+                  />
+                )}
+              </View>
+            ) : (
+              <View style={styles.emptyComposition}>
+                <AppIcon name="videocam-outline" size={48} color="#FFFFFF" />
+                <Text style={styles.emptyText}>No media to preview</Text>
+              </View>
+            )}
+          </View>
         </View>
       </GestureDetector>
 
@@ -517,6 +598,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+  },
+  compositionFrame: {
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+    borderRadius: 16,
   },
   composition: {
     backgroundColor: '#000000',

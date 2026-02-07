@@ -107,6 +107,9 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const [, setIsImporting] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
+  const [clipViewportAspectRatios, setClipViewportAspectRatios] = useState<
+    Record<string, number>
+  >({});
   const soundEnabled = usePreferencesStore(state => state.soundEnabled);
 
   // Playback state
@@ -399,6 +402,25 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
     }
     setIsPreviewVisible(true);
   };
+
+  const handleReportClipViewportAspectRatio = useCallback(
+    (clipId: string, aspectRatio: number) => {
+      if (!clipId) return;
+      if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return;
+
+      setClipViewportAspectRatios(prev => {
+        const current = prev[clipId];
+        if (current && Math.abs(current - aspectRatio) < 0.01) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [clipId]: aspectRatio,
+        };
+      });
+    },
+    [],
+  );
 
   const handleExportComplete = async (outputPath: string) => {
     if (!project) return;
@@ -804,6 +826,9 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
                 onSelectClipId={setSelectedClipId}
                 onAddMedia={handlePickMedia}
                 onUpdateMediaTransform={handleUpdateClipTransform}
+                onReportClipViewportAspectRatio={
+                  handleReportClipViewportAspectRatio
+                }
               />
             </Animated.View>
           )}
@@ -923,6 +948,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       >
         <PreviewScreen
           project={project}
+          clipViewportAspectRatios={clipViewportAspectRatios}
           isVisible={isPreviewVisible}
           onBack={() => setIsPreviewVisible(false)}
           onExport={() => {
@@ -974,6 +1000,7 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
   const totalDurationShared = useSharedValue(totalDuration);
   const totalContentWidthShared = useSharedValue(0);
   const trackViewportWidthShared = useSharedValue(0);
+  const playheadDragStartX = useSharedValue(0);
   const isReorderingClipShared = useSharedValue(false);
   const [liveOrderIds, setLiveOrderIds] = useState<string[] | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
@@ -1013,10 +1040,11 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
     );
   }, [segments, pixelsPerSecond]);
 
-  const handleTrackTap = useCallback(
+  const seekToContentX = useCallback(
     (contentX: number) => {
       if (totalContentWidth <= 0 || totalDuration <= 0) return;
-      const time = (contentX / totalContentWidth) * totalDuration;
+      const clampedX = Math.max(0, Math.min(totalContentWidth, contentX));
+      const time = (clampedX / totalContentWidth) * totalDuration;
       onSeek(Math.max(0, Math.min(totalDuration, time)));
     },
     [totalContentWidth, totalDuration, onSeek],
@@ -1186,8 +1214,56 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
   });
 
   const trackTapGesture = Gesture.Tap().onEnd(e => {
-    runOnJS(handleTrackTap)(e.x + scrollOffset.value);
+    runOnJS(seekToContentX)(e.x + scrollOffset.value);
   });
+
+  const playheadPanGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(totalDuration > 0 && totalContentWidth > 0)
+        .onStart(() => {
+          if (
+            totalDurationShared.value <= 0 ||
+            totalContentWidthShared.value <= 0
+          ) {
+            playheadDragStartX.value = 0;
+            return;
+          }
+
+          playheadDragStartX.value =
+            (playheadTime.value / totalDurationShared.value) *
+            totalContentWidthShared.value;
+        })
+        .onUpdate(event => {
+          if (
+            totalDurationShared.value <= 0 ||
+            totalContentWidthShared.value <= 0
+          ) {
+            return;
+          }
+
+          const nextX = Math.max(
+            0,
+            Math.min(
+              totalContentWidthShared.value,
+              playheadDragStartX.value + event.translationX,
+            ),
+          );
+
+          playheadTime.value =
+            (nextX / totalContentWidthShared.value) * totalDurationShared.value;
+          runOnJS(seekToContentX)(nextX);
+        }),
+    [
+      playheadDragStartX,
+      playheadTime,
+      seekToContentX,
+      totalContentWidth,
+      totalContentWidthShared,
+      totalDuration,
+      totalDurationShared,
+    ],
+  );
 
   return (
     <View style={[tlStyles.container, { backgroundColor: colors.surface }]}>
@@ -1249,13 +1325,12 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
               })()}
 
               {/* Playhead */}
-              <Animated.View
-                pointerEvents="none"
-                style={[tlStyles.playhead, playheadAnimatedStyle]}
-              >
-                <View style={tlStyles.playheadDot} />
-                <View style={tlStyles.playheadLine} />
-              </Animated.View>
+              <GestureDetector gesture={playheadPanGesture}>
+                <Animated.View style={[tlStyles.playhead, playheadAnimatedStyle]}>
+                  <View style={tlStyles.playheadDot} />
+                  <View style={tlStyles.playheadLine} />
+                </Animated.View>
+              </GestureDetector>
             </View>
           </Animated.ScrollView>
         </GestureDetector>
@@ -1659,12 +1734,12 @@ const tlStyles = StyleSheet.create({
     position: 'absolute',
     top: -6,
     bottom: -6,
-    width: 2,
+    width: 28,
     left: 0,
     zIndex: 20,
     elevation: 20,
     alignItems: 'center',
-    marginLeft: -1,
+    marginLeft: -14,
   },
   playheadDot: {
     width: 10,
@@ -1672,11 +1747,13 @@ const tlStyles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: PLAYHEAD_COLOR,
     marginTop: -2,
+    alignSelf: 'center',
   },
   playheadLine: {
     flex: 1,
     width: 2,
     backgroundColor: PLAYHEAD_COLOR,
+    alignSelf: 'center',
   },
 });
 
@@ -1692,6 +1769,7 @@ const EditorCanvas: React.FC<{
     clipId: string,
     transformUpdates: Partial<TransformConfig>,
   ) => void;
+  onReportClipViewportAspectRatio: (clipId: string, aspectRatio: number) => void;
 }> = ({
   layout,
   media,
@@ -1699,6 +1777,7 @@ const EditorCanvas: React.FC<{
   onSelectClipId,
   onAddMedia,
   onUpdateMediaTransform,
+  onReportClipViewportAspectRatio,
 }) => {
   if (layout.type === 'grid' && layout.rows && layout.cols) {
     const cells = [];
@@ -1722,6 +1801,7 @@ const EditorCanvas: React.FC<{
           onSelectMedia={onSelectClipId}
           onAdd={onAddMedia}
           onUpdateMediaTransform={onUpdateMediaTransform}
+          onReportViewportAspectRatio={onReportClipViewportAspectRatio}
           spacing={layout.spacing}
           borderRadius={layout.borderRadius}
         />,
@@ -1751,6 +1831,7 @@ const GridCell: React.FC<{
     clipId: string,
     transformUpdates: Partial<TransformConfig>,
   ) => void;
+  onReportViewportAspectRatio: (clipId: string, aspectRatio: number) => void;
   spacing: number;
   borderRadius: number;
 }> = ({
@@ -1759,6 +1840,7 @@ const GridCell: React.FC<{
   onSelectMedia,
   onAdd,
   onUpdateMediaTransform,
+  onReportViewportAspectRatio,
   spacing,
   borderRadius,
 }) => {
@@ -1982,6 +2064,9 @@ const GridCell: React.FC<{
           const { width, height } = event.nativeEvent.layout;
           if (width > 0 && height > 0) {
             setCellSize({ width, height });
+            if (mediaId) {
+              onReportViewportAspectRatio(mediaId, width / height);
+            }
           }
         }}
         style={[
