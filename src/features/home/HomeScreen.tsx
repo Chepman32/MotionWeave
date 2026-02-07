@@ -1,15 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  Dimensions,
   TouchableOpacity,
   StatusBar,
-  Image,
+  Alert,
+  Share,
+  ActivityIndicator,
 } from 'react-native';
-import Video from 'react-native-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
@@ -27,10 +27,11 @@ import { useProjectStore } from '../../entities/project/store';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 import { AppBottomNav } from '../../shared/components/AppBottomNav';
 import { AppIcon } from '../../shared/components/AppIcon';
-import { MediaClip, Project } from '../../shared/types';
-import { normalizeMediaUri } from '../../shared/utils/helpers';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+import { Project } from '../../shared/types';
+import { FoldersAccordion, ProjectContextActionId } from './FoldersAccordion';
+import { FastPreviewModal } from './FastPreviewModal';
+import { FolderSelectorModal } from './FolderSelectorModal';
+import { CreateFolderModal } from './CreateFolderModal';
 
 interface HomeScreenProps {
   onNavigateToEditor: () => void;
@@ -45,11 +46,168 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 }) => {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { projects, setCurrentProject } = useProjectStore();
+  const {
+    projects,
+    folders,
+    setCurrentProject,
+    loadFolders,
+    createFolder,
+    toggleFolderCollapse,
+    moveProjectToFolder,
+    duplicateProject,
+    moveToTrash,
+    recoverFromTrash,
+  } = useProjectStore();
+
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [fastPreviewVisible, setFastPreviewVisible] = useState(false);
+  const [folderSelectorVisible, setFolderSelectorVisible] = useState(false);
+  const [createFolderVisible, setCreateFolderVisible] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    loadFolders();
+  }, [loadFolders]);
 
   const handleProjectPress = (project: Project) => {
     setCurrentProject(project);
     onNavigateToEditor();
+  };
+
+  const trashFolder = folders.find(f => f.type === 'trash');
+  const isProjectInTrash = (project: Project) => project.folderId === trashFolder?.id;
+
+  const handleFastPreview = (project: Project) => {
+    setSelectedProject(project);
+    setFastPreviewVisible(true);
+  };
+
+  const handleMoveToFolder = (project: Project) => {
+    setSelectedProject(project);
+    setFolderSelectorVisible(true);
+  };
+
+  const handleDuplicate = async (project: Project) => {
+    setIsProcessing(true);
+    try {
+      await duplicateProject(project.id);
+      Alert.alert('Success', `${project.name} has been duplicated`);
+    } catch {
+      Alert.alert('Error', 'Failed to duplicate project');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRemove = async (project: Project) => {
+    Alert.alert(
+      'Move to Trash',
+      `Are you sure you want to move "${project.name}" to trash?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Move to Trash',
+          style: 'destructive',
+          onPress: async () => {
+            setIsProcessing(true);
+            try {
+              await moveToTrash(project.id);
+            } catch {
+              Alert.alert('Error', 'Failed to move project to trash');
+            } finally {
+              setIsProcessing(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleRecover = async (project: Project) => {
+    setIsProcessing(true);
+    try {
+      await recoverFromTrash(project.id);
+      Alert.alert('Success', `${project.name} has been recovered`);
+    } catch {
+      Alert.alert('Error', 'Failed to recover project');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleShare = async (project: Project) => {
+    if (project.outputPath) {
+      try {
+        await Share.share({
+          title: project.name,
+          message: `Check out my ${project.name} video created with MotionWeave!`,
+          url: project.outputPath,
+        });
+      } catch (error) {
+        console.error('Error sharing project:', error);
+      }
+    } else {
+      Alert.alert(
+        'Export Required',
+        'Please export this project before sharing.',
+        [{ text: 'OK' }],
+      );
+    }
+  };
+
+  const handleProjectContextAction = (
+    project: Project,
+    actionId: ProjectContextActionId,
+  ) => {
+    switch (actionId) {
+      case 'preview':
+        handleFastPreview(project);
+        return;
+      case 'folder':
+        handleMoveToFolder(project);
+        return;
+      case 'duplicate':
+        handleDuplicate(project);
+        return;
+      case 'share':
+        handleShare(project);
+        return;
+      case 'recover':
+        handleRecover(project);
+        return;
+      case 'remove':
+        if (isProjectInTrash(project)) {
+          handleRecover(project);
+        } else {
+          handleRemove(project);
+        }
+    }
+  };
+
+  const handleSelectFolder = async (folderId: string | null) => {
+    if (!selectedProject) return;
+
+    setIsProcessing(true);
+    try {
+      await moveProjectToFolder(selectedProject.id, folderId);
+    } catch {
+      Alert.alert('Error', 'Failed to move project to folder');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCreateFolder = async (name: string) => {
+    try {
+      await createFolder(name);
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const handleCreateNewFolderFromSelector = () => {
+    setFolderSelectorVisible(false);
+    setCreateFolderVisible(true);
   };
 
   return (
@@ -82,9 +240,50 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         {projects.length === 0 ? (
           <EmptyState />
         ) : (
-          <ProjectsGrid projects={projects} onProjectPress={handleProjectPress} />
+          <FoldersAccordion
+            projects={projects}
+            folders={folders}
+            onProjectPress={handleProjectPress}
+            onProjectContextAction={handleProjectContextAction}
+            onToggleFolderCollapse={toggleFolderCollapse}
+          />
         )}
       </ScrollView>
+
+      {/* Modals */}
+      <FastPreviewModal
+        visible={fastPreviewVisible}
+        project={selectedProject}
+        onClose={() => setFastPreviewVisible(false)}
+      />
+
+      <FolderSelectorModal
+        visible={folderSelectorVisible}
+        onClose={() => setFolderSelectorVisible(false)}
+        folders={folders}
+        currentFolderId={selectedProject?.folderId || null}
+        onSelectFolder={handleSelectFolder}
+        onCreateNewFolder={handleCreateNewFolderFromSelector}
+      />
+
+      <CreateFolderModal
+        visible={createFolderVisible}
+        onClose={() => setCreateFolderVisible(false)}
+        onCreateFolder={handleCreateFolder}
+        existingFolderNames={folders.map(f => f.name)}
+      />
+
+      {/* Processing Indicator */}
+      {isProcessing && (
+        <View style={styles.processingOverlay}>
+          <View style={[styles.processingContainer, { backgroundColor: colors.surface }]}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={[styles.processingText, { color: colors.textPrimary }]}>
+              Processing...
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* FAB */}
       <FAB onPress={onNavigateToEditor} />
@@ -113,119 +312,6 @@ const EmptyState: React.FC = () => {
         Tap + to create your first video collage
       </Text>
     </View>
-  );
-};
-
-const ProjectsGrid: React.FC<{
-  projects: Project[];
-  onProjectPress: (project: Project) => void;
-}> = ({ projects, onProjectPress }) => {
-  return (
-    <View style={styles.projectsGrid}>
-      {projects.map(project => (
-        <ProjectCard
-          key={project.id}
-          project={project}
-          onPress={() => onProjectPress(project)}
-        />
-      ))}
-    </View>
-  );
-};
-
-const ProjectPreview: React.FC<{ clip: MediaClip | null }> = ({ clip }) => {
-  const { colors } = useTheme();
-
-  if (!clip) {
-    return (
-      <View
-        style={[styles.projectThumbnail, { backgroundColor: colors.border }]}
-      >
-        <AppIcon name="videocam-outline" size={22} color={colors.textSecondary} />
-      </View>
-    );
-  }
-
-  const thumbnailUri = clip.thumbnailUri ? normalizeMediaUri(clip.thumbnailUri) : null;
-  const mediaUri = normalizeMediaUri(clip.localUri);
-
-  if (!mediaUri) {
-    return (
-      <View
-        style={[styles.projectThumbnail, { backgroundColor: colors.border }]}
-      >
-        <AppIcon name="image-outline" size={22} color={colors.textSecondary} />
-      </View>
-    );
-  }
-
-  const showThumbnailImage =
-    clip.type === 'video' && !!thumbnailUri && clip.thumbnailUri !== clip.localUri;
-
-  return (
-    <View style={[styles.projectThumbnail, { backgroundColor: colors.border }]}>
-      {clip.type === 'video' ? (
-        showThumbnailImage ? (
-          <Image
-            source={{ uri: thumbnailUri as string }}
-            style={styles.projectThumbnailImage}
-            resizeMode="cover"
-          />
-        ) : (
-        <Video
-          source={{ uri: mediaUri }}
-          style={styles.projectThumbnailImage}
-          resizeMode="cover"
-          paused={true}
-          repeat={false}
-          muted={true}
-          pointerEvents="none"
-        />
-        )
-      ) : (
-        <Image
-          source={{ uri: thumbnailUri || mediaUri }}
-          style={styles.projectThumbnailImage}
-          resizeMode="cover"
-        />
-      )}
-    </View>
-  );
-};
-
-const ProjectCard: React.FC<{ project: Project; onPress: () => void }> = ({
-  project,
-  onPress,
-}) => {
-  const { colors } = useTheme();
-  const scale = useSharedValue(1);
-  const firstClip = project.videos[0] ?? null;
-
-  const tapGesture = Gesture.Tap()
-    .onStart(() => {
-      scale.value = withSpring(0.95);
-    })
-    .onEnd(() => {
-      scale.value = withSpring(1);
-      runOnJS(onPress)();
-    });
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  return (
-    <GestureDetector gesture={tapGesture}>
-      <Animated.View
-        style={[
-          styles.projectCard,
-          { backgroundColor: colors.surface },
-          animatedStyle,
-        ]}
-      >
-        <ProjectPreview clip={firstClip} />
-      </Animated.View>
-    </GestureDetector>
   );
 };
 
@@ -310,34 +396,6 @@ const styles = StyleSheet.create({
   emptySubtext: {
     ...TYPOGRAPHY.body,
   },
-  projectsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: SPACING.md,
-  },
-  projectCard: {
-    width: (SCREEN_WIDTH - SPACING.lg * 2 - SPACING.md) / 2,
-    borderRadius: 12,
-    padding: 0,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  projectThumbnail: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: 12,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  projectThumbnailImage: {
-    width: '100%',
-    height: '100%',
-  },
   fab: {
     position: 'absolute',
     bottom: 100,
@@ -362,5 +420,22 @@ const styles = StyleSheet.create({
     fontSize: 32,
     color: '#FFFFFF',
     fontWeight: '300',
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  processingContainer: {
+    padding: SPACING.xl,
+    borderRadius: 12,
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
+  processingText: {
+    ...TYPOGRAPHY.body,
+    fontWeight: '600',
   },
 });

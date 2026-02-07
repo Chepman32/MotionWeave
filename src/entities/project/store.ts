@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Project } from '../../shared/types';
+import { Project, Folder } from '../../shared/types';
 import { DatabaseService } from '../../processes/video-processing/DatabaseService';
 
 interface ProjectStore {
@@ -7,12 +7,21 @@ interface ProjectStore {
   currentProject: Project | null;
   isLoading: boolean;
   isHydrated: boolean;
+  folders: Folder[];
   addProject: (project: Project) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   setCurrentProject: (project: Project | null) => void;
   loadProjects: () => Promise<void>;
   hydrate: () => Promise<void>;
+  loadFolders: () => Promise<void>;
+  createFolder: (name: string) => Promise<Folder>;
+  deleteFolder: (id: string) => Promise<void>;
+  toggleFolderCollapse: (id: string) => void;
+  moveProjectToFolder: (projectId: string, folderId: string | null) => Promise<void>;
+  duplicateProject: (projectId: string) => Promise<Project>;
+  moveToTrash: (projectId: string) => Promise<void>;
+  recoverFromTrash: (projectId: string) => Promise<void>;
 }
 
 const isProjectLike = (value: unknown): value is Project => {
@@ -46,10 +55,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   currentProject: null,
   isLoading: false,
   isHydrated: false,
+  folders: [],
 
   hydrate: async () => {
     try {
-      await get().loadProjects();
+      await Promise.all([get().loadProjects(), get().loadFolders()]);
       set({ isHydrated: true });
     } catch (error) {
       console.warn('Failed to hydrate projects:', error);
@@ -172,6 +182,106 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to load projects:', error);
       set({ isLoading: false });
+      throw error;
+    }
+  },
+
+  loadFolders: async () => {
+    try {
+      const folders = await DatabaseService.getAllFolders();
+      set({ folders });
+    } catch (error) {
+      console.error('Failed to load folders:', error);
+      throw error;
+    }
+  },
+
+  createFolder: async (name: string) => {
+    try {
+      const folder = await DatabaseService.createFolder(name, 'custom');
+      set(state => ({ folders: [...state.folders, folder] }));
+      return folder;
+    } catch (error) {
+      console.error('Failed to create folder:', error);
+      throw error;
+    }
+  },
+
+  deleteFolder: async (id: string) => {
+    try {
+      await DatabaseService.deleteFolder(id);
+      set(state => ({ folders: state.folders.filter(f => f.id !== id) }));
+      await get().loadProjects(); // Reload projects as their folderId may have changed
+    } catch (error) {
+      console.error('Failed to delete folder:', error);
+      throw error;
+    }
+  },
+
+  toggleFolderCollapse: (id: string) => {
+    set(state => ({
+      folders: state.folders.map(f =>
+        f.id === id ? { ...f, isCollapsed: !f.isCollapsed } : f
+      ),
+    }));
+    // Update in database
+    const folder = get().folders.find(f => f.id === id);
+    if (folder) {
+      DatabaseService.updateFolder(id, { isCollapsed: !folder.isCollapsed }).catch(error =>
+        console.error('Failed to update folder collapse state:', error),
+      );
+    }
+  },
+
+  moveProjectToFolder: async (projectId: string, folderId: string | null) => {
+    try {
+      await DatabaseService.moveProjectToFolder(projectId, folderId);
+      await get().loadProjects(); // Reload to reflect changes
+    } catch (error) {
+      console.error('Failed to move project to folder:', error);
+      throw error;
+    }
+  },
+
+  duplicateProject: async (projectId: string) => {
+    try {
+      const duplicated = await DatabaseService.duplicateProject(projectId);
+      set(state => ({
+        projects: [duplicated, ...state.projects],
+      }));
+      return duplicated;
+    } catch (error) {
+      console.error('Failed to duplicate project:', error);
+      throw error;
+    }
+  },
+
+  moveToTrash: async (projectId: string) => {
+    try {
+      // Check if Trash folder exists
+      let trashFolder = get().folders.find(f => f.type === 'trash');
+
+      // Create Trash folder if it doesn't exist
+      if (!trashFolder) {
+        trashFolder = await DatabaseService.createFolder('Trash', 'trash');
+        set(state => ({ folders: [...state.folders, trashFolder!] }));
+      }
+
+      // Move project to trash
+      await DatabaseService.moveProjectToFolder(projectId, trashFolder.id);
+      await get().loadProjects();
+    } catch (error) {
+      console.error('Failed to move project to trash:', error);
+      throw error;
+    }
+  },
+
+  recoverFromTrash: async (projectId: string) => {
+    try {
+      await DatabaseService.moveProjectToFolder(projectId, null);
+      await get().loadProjects();
+    } catch (error) {
+      console.error('Failed to recover project from trash:', error);
       throw error;
     }
   },

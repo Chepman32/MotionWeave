@@ -2,7 +2,8 @@ import SQLite from 'react-native-sqlite-storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
-import { Project, MediaClip } from '../../shared/types';
+import { Project, MediaClip, Folder } from '../../shared/types';
+import { generateId } from '../../shared/utils/helpers';
 
 SQLite.enablePromise(true);
 
@@ -116,9 +117,31 @@ export class DatabaseService {
       );
     `;
 
+    const createFoldersTable = `
+      CREATE TABLE IF NOT EXISTS folders (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'custom',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        order_index INTEGER DEFAULT 0,
+        is_collapsed INTEGER DEFAULT 0
+      );
+    `;
+
     await this.db.executeSql(createProjectsTable);
     await this.db.executeSql(createMediaClipsTable);
     await this.db.executeSql(createPreferencesTable);
+    await this.db.executeSql(createFoldersTable);
+
+    // Add folder_id column to projects table if it doesn't exist
+    try {
+      await this.db.executeSql('ALTER TABLE projects ADD COLUMN folder_id TEXT;');
+      console.log('✓ Added folder_id column to projects table');
+    } catch (error) {
+      // Column might already exist, that's fine
+    }
+
     console.log('✓ Database tables created');
   }
 
@@ -130,9 +153,9 @@ export class DatabaseService {
     }
 
     const query = `
-      INSERT OR REPLACE INTO projects 
-      (id, name, created_at, updated_at, thumbnail_path, duration, layout_config, is_exported, export_path, settings)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO projects
+      (id, name, created_at, updated_at, thumbnail_path, duration, layout_config, is_exported, export_path, settings, folder_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const params = [
@@ -146,6 +169,7 @@ export class DatabaseService {
       project.outputPath ? 1 : 0,
       project.outputPath || null,
       JSON.stringify(project.settings),
+      project.folderId || null,
     ];
 
     try {
@@ -207,6 +231,7 @@ export class DatabaseService {
           quality: 'high',
           format: 'mp4',
         }),
+        folderId: row.folder_id || null,
       };
     } catch (error) {
       console.warn('SQLite getProject failed, using fallback:', error);
@@ -264,6 +289,7 @@ export class DatabaseService {
             quality: 'high',
             format: 'mp4',
           }),
+          folderId: row.folder_id || null,
         });
       }
 
@@ -428,6 +454,156 @@ export class DatabaseService {
 
     if (result.rows.length === 0) return null;
     return result.rows.item(0).value;
+  }
+
+  // Folder Operations
+  static async createFolder(
+    name: string,
+    type: 'custom' | 'trash' = 'custom',
+  ): Promise<Folder> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const folder: Folder = {
+      id: generateId(),
+      name,
+      type,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      orderIndex: 0,
+      isCollapsed: false,
+    };
+
+    const query = `
+      INSERT INTO folders
+      (id, name, type, created_at, updated_at, order_index, is_collapsed)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const params = [
+      folder.id,
+      folder.name,
+      folder.type,
+      folder.createdAt,
+      folder.updatedAt,
+      folder.orderIndex,
+      folder.isCollapsed ? 1 : 0,
+    ];
+
+    await this.db.executeSql(query, params);
+    return folder;
+  }
+
+  static async getAllFolders(): Promise<Folder[]> {
+    if (!this.db) return [];
+
+    try {
+      const query = 'SELECT * FROM folders ORDER BY order_index ASC, created_at DESC';
+      const [result] = await this.db.executeSql(query);
+
+      const folders: Folder[] = [];
+      for (let i = 0; i < result.rows.length; i++) {
+        const row = result.rows.item(i);
+        folders.push({
+          id: row.id,
+          name: row.name,
+          type: row.type || 'custom',
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          orderIndex: row.order_index || 0,
+          isCollapsed: row.is_collapsed === 1,
+        });
+      }
+
+      return folders;
+    } catch (error) {
+      console.warn('Failed to get folders:', error);
+      return [];
+    }
+  }
+
+  static async updateFolder(id: string, updates: Partial<Folder>): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const updateFields: string[] = [];
+    const params: any[] = [];
+
+    if (updates.name !== undefined) {
+      updateFields.push('name = ?');
+      params.push(updates.name);
+    }
+    if (updates.orderIndex !== undefined) {
+      updateFields.push('order_index = ?');
+      params.push(updates.orderIndex);
+    }
+    if (updates.isCollapsed !== undefined) {
+      updateFields.push('is_collapsed = ?');
+      params.push(updates.isCollapsed ? 1 : 0);
+    }
+
+    updateFields.push('updated_at = ?');
+    params.push(Date.now());
+
+    params.push(id);
+
+    const query = `UPDATE folders SET ${updateFields.join(', ')} WHERE id = ?`;
+    await this.db.executeSql(query, params);
+  }
+
+  static async deleteFolder(id: string): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // Move all projects in this folder back to "All Projects" (null folder)
+    await this.db.executeSql('UPDATE projects SET folder_id = NULL WHERE folder_id = ?', [id]);
+
+    // Delete the folder
+    await this.db.executeSql('DELETE FROM folders WHERE id = ?', [id]);
+  }
+
+  static async moveProjectToFolder(
+    projectId: string,
+    folderId: string | null,
+  ): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.executeSql(
+      'UPDATE projects SET folder_id = ?, updated_at = ? WHERE id = ?',
+      [folderId, Date.now(), projectId],
+    );
+  }
+
+  static async getProjectsByFolder(folderId: string | null): Promise<Project[]> {
+    const allProjects = await this.getAllProjects();
+
+    if (folderId === null) {
+      // Return projects not in any folder
+      return allProjects.filter(p => !p.folderId);
+    }
+
+    return allProjects.filter(p => p.folderId === folderId);
+  }
+
+  static async duplicateProject(projectId: string): Promise<Project> {
+    const sourceProject = await this.getProject(projectId);
+    if (!sourceProject) {
+      throw new Error('Project not found');
+    }
+
+    // Create new project with duplicated data
+    const newProject: Project = {
+      ...sourceProject,
+      id: generateId(),
+      name: `${sourceProject.name} Copy`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      folderId: null, // Place copy in "All Projects"
+      videos: sourceProject.videos.map(clip => ({
+        ...clip,
+        id: generateId(), // Generate new ID for each clip
+      })),
+    };
+
+    await this.saveProject(newProject);
+    return newProject;
   }
 
   static async close(): Promise<void> {

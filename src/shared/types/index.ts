@@ -12,6 +12,7 @@ export interface Project {
   videos: MediaClip[];
   outputPath?: string;
   settings: ProjectSettings;
+  folderId?: string | null;
 }
 
 export interface MediaClip {
@@ -69,6 +70,16 @@ export interface ProjectSettings {
   frameRate: 24 | 30 | 60;
   quality: 'low' | 'medium' | 'high' | 'maximum';
   format: 'mp4' | 'mov';
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  type: 'custom' | 'trash';
+  createdAt: number;
+  updatedAt: number;
+  orderIndex: number;
+  isCollapsed: boolean;
 }
 
 export interface Template {
