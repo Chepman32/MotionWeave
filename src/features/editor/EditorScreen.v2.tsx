@@ -26,6 +26,11 @@ import Animated, {
   runOnJS,
   FadeIn,
   FadeOut,
+  SlideInUp,
+  SlideInDown,
+  SlideInLeft,
+  SlideInRight,
+  ZoomIn,
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -2210,6 +2215,35 @@ const PlaybackPreview: React.FC<{
   });
   const [mediaAspectRatio, setMediaAspectRatio] = useState(1);
 
+  const getEnteringAnimation = (transitionType: TransitionConfig['type'] | undefined, duration: number) => {
+    if (!transitionType || transitionType === 'none') return undefined;
+
+    const durationMs = duration * 1000;
+
+    switch (transitionType) {
+      case 'fade-in':
+        return FadeIn.duration(durationMs);
+      case 'slide-up':
+        return SlideInUp.duration(durationMs);
+      case 'slide-down':
+        return SlideInDown.duration(durationMs);
+      case 'slide-left':
+        return SlideInLeft.duration(durationMs);
+      case 'slide-right':
+        return SlideInRight.duration(durationMs);
+      case 'zoom-in':
+        return ZoomIn.duration(durationMs);
+      case 'fade-out':
+        return FadeIn.duration(durationMs);
+      case 'zoom-out':
+        return ZoomIn.duration(durationMs);
+      case 'rotating':
+        return FadeIn.duration(durationMs);
+      default:
+        return undefined;
+    }
+  };
+
   // Show activeSegment clip during playback, otherwise show selected clip
   const displayClip = activeSegment?.clip ?? selectedClip;
   const displayResizeMode = displayClip ? getClipResizeMode(displayClip) : 'cover';
@@ -2306,22 +2340,28 @@ const PlaybackPreview: React.FC<{
             ]}
           >
             {displayClip.type === 'video' ? (
-              <Video
+              <Animated.View
                 key={displayClip.id}
-                ref={activeSegment?.clip.id === displayClip.id ? videoRef : undefined}
-                source={{ uri: normalizeMediaUri(displayClip.localUri) }}
-                style={styles.previewMediaContent}
-                resizeMode="stretch"
-                paused={!isPlaying}
-                repeat={false}
-                muted={!soundEnabled}
-                progressUpdateInterval={33}
-                onLoad={handlePreviewVideoLoad}
-                onProgress={data => onVideoProgress(displayClip.id, data)}
-              />
+                entering={getEnteringAnimation(displayClip.transition?.type, displayClip.transition?.duration || 0.5)}
+                style={{ width: '100%', height: '100%' }}
+              >
+                <Video
+                  ref={activeSegment?.clip.id === displayClip.id ? videoRef : undefined}
+                  source={{ uri: normalizeMediaUri(displayClip.localUri) }}
+                  style={styles.previewMediaContent}
+                  resizeMode="stretch"
+                  paused={!isPlaying}
+                  repeat={false}
+                  muted={!soundEnabled}
+                  progressUpdateInterval={33}
+                  onLoad={handlePreviewVideoLoad}
+                  onProgress={data => onVideoProgress(displayClip.id, data)}
+                />
+              </Animated.View>
             ) : (
-              <Image
+              <Animated.Image
                 key={displayClip.id}
+                entering={getEnteringAnimation(displayClip.transition?.type, displayClip.transition?.duration || 0.5)}
                 source={{ uri: normalizeMediaUri(displayClip.localUri) }}
                 style={styles.previewMediaContent}
                 resizeMode="stretch"

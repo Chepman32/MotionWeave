@@ -16,6 +16,12 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   runOnJS,
+  FadeIn,
+  SlideInUp,
+  SlideInDown,
+  SlideInLeft,
+  SlideInRight,
+  ZoomIn,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '../../shared/hooks/useTheme';
@@ -97,6 +103,36 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
   const activeSegmentRef = useRef<TimelineSegment | null>(null);
   const pendingSeekRef = useRef<{ clipId: string; time: number } | null>(null);
   const didAutoAdvanceRef = useRef<string | null>(null);
+
+  const getEnteringAnimation = (transitionType: MediaClip['transition'], duration: number) => {
+    if (!transitionType || transitionType.type === 'none') return undefined;
+
+    const durationMs = duration * 1000;
+
+    switch (transitionType.type) {
+      case 'fade-in':
+        return FadeIn.duration(durationMs);
+      case 'slide-up':
+        return SlideInUp.duration(durationMs);
+      case 'slide-down':
+        return SlideInDown.duration(durationMs);
+      case 'slide-left':
+        return SlideInLeft.duration(durationMs);
+      case 'slide-right':
+        return SlideInRight.duration(durationMs);
+      case 'zoom-in':
+        return ZoomIn.duration(durationMs);
+      case 'fade-out':
+        return FadeIn.duration(durationMs);
+      case 'zoom-out':
+        return ZoomIn.duration(durationMs);
+      case 'rotating':
+        return FadeIn.duration(durationMs);
+      default:
+        return undefined;
+    }
+  };
+
   const [containerSize, setContainerSize] = useState({
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT,
@@ -435,24 +471,30 @@ export const PreviewScreen: React.FC<PreviewScreenProps> = ({
                 }}
               >
                 {activeClip.type === 'video' ? (
-                  <Video
+                  <Animated.View
                     key={activeClip.id}
-                    ref={videoRef}
-                    source={{ uri: normalizeMediaUri(activeClip.localUri) }}
-                    style={styles.fullscreenMedia}
-                    resizeMode="stretch"
-                    paused={!isPlaying}
-                    repeat={false}
-                    muted={!soundEnabled}
-                    progressUpdateInterval={250}
-                    onLoad={handleVideoLoad}
-                    onProgress={data =>
-                      handleVideoProgress(activeClip.id, data)
-                    }
-                  />
+                    entering={getEnteringAnimation(activeClip.transition, activeClip.transition?.duration || 0.5)}
+                    style={{ width: '100%', height: '100%' }}
+                  >
+                    <Video
+                      ref={videoRef}
+                      source={{ uri: normalizeMediaUri(activeClip.localUri) }}
+                      style={styles.fullscreenMedia}
+                      resizeMode="stretch"
+                      paused={!isPlaying}
+                      repeat={false}
+                      muted={!soundEnabled}
+                      progressUpdateInterval={250}
+                      onLoad={handleVideoLoad}
+                      onProgress={data =>
+                        handleVideoProgress(activeClip.id, data)
+                      }
+                    />
+                  </Animated.View>
                 ) : (
-                  <Image
+                  <Animated.Image
                     key={activeClip.id}
+                    entering={getEnteringAnimation(activeClip.transition, activeClip.transition?.duration || 0.5)}
                     source={{ uri: normalizeMediaUri(activeClip.localUri) }}
                     style={styles.fullscreenMedia}
                     resizeMode="stretch"

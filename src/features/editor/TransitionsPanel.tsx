@@ -28,7 +28,6 @@ const TRANSITION_PRESETS: Array<{
   name: string;
   iconName: AppIconName;
 }> = [
-  { type: 'none', name: 'None', iconName: 'close-circle-outline' },
   { type: 'slide-up', name: 'Slide Up', iconName: 'arrow-up-circle-outline' },
   { type: 'slide-left', name: 'Slide Left', iconName: 'arrow-back-circle-outline' },
   { type: 'slide-right', name: 'Slide Right', iconName: 'arrow-forward-circle-outline' },
@@ -52,10 +51,22 @@ export const TransitionsPanel: React.FC<TransitionsPanelProps> = ({
   const handleTransitionSelect = (type: TransitionConfig['type']) => {
     if (!selectedClip) return;
 
-    onTransitionChange(selectedClip.id, {
-      type,
-      duration: type === 'none' ? 0 : duration,
-    });
+    // Toggle behavior: if clicking the same transition, reset to 'none'
+    const isCurrentlySelected = currentTransition.type === type;
+
+    if (isCurrentlySelected) {
+      // Reset transition to 'none'
+      onTransitionChange(selectedClip.id, {
+        type: 'none',
+        duration: 0,
+      });
+    } else {
+      // Apply new transition
+      onTransitionChange(selectedClip.id, {
+        type,
+        duration,
+      });
+    }
   };
 
   const handleDurationChange = (value: number) => {
