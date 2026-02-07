@@ -1028,16 +1028,26 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
   const playheadTime = useSharedValue(currentTime);
   const isPlayingShared = useSharedValue(isPlaying);
   const totalDurationShared = useSharedValue(totalDuration);
-  const totalContentWidthShared = useSharedValue(0);
+
+  // Compute initial content width before creating shared value
+  const pixelsPerSecond = useMemo(
+    () => PIXELS_PER_SECOND * timelineScale,
+    [timelineScale],
+  );
+
+  const initialContentWidth = useMemo(() => {
+    return segments.reduce(
+      (sum, seg) => sum + seg.duration * pixelsPerSecond,
+      0,
+    );
+  }, [segments, pixelsPerSecond]);
+
+  const totalContentWidthShared = useSharedValue(initialContentWidth);
   const trackViewportWidthShared = useSharedValue(0);
   const playheadDragStartX = useSharedValue(0);
   const isReorderingClipShared = useSharedValue(false);
   const [liveOrderIds, setLiveOrderIds] = useState<string[] | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
-  const pixelsPerSecond = useMemo(
-    () => PIXELS_PER_SECOND * timelineScale,
-    [timelineScale],
-  );
 
   const baseOrderIds = useMemo(
     () => segments.map(seg => seg.clip.id),
@@ -1063,12 +1073,7 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
     }
   }, [segments, draggingClipId]);
 
-  const totalContentWidth = useMemo(() => {
-    return segments.reduce(
-      (sum, seg) => sum + seg.duration * pixelsPerSecond,
-      0,
-    );
-  }, [segments, pixelsPerSecond]);
+  const totalContentWidth = initialContentWidth;
 
   const seekToContentX = useCallback(
     (contentX: number) => {
@@ -1190,6 +1195,36 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
     [trackViewportWidthShared],
   );
 
+  // Ensure playhead is visible on initial load
+  useEffect(() => {
+    if (
+      totalContentWidthShared.value > 0 &&
+      trackViewportWidthShared.value > 0 &&
+      totalDurationShared.value > 0
+    ) {
+      const playheadX =
+        (playheadTime.value / totalDurationShared.value) *
+        totalContentWidthShared.value;
+      const maxOffset = Math.max(
+        0,
+        totalContentWidthShared.value - trackViewportWidthShared.value,
+      );
+      const targetOffset = Math.max(
+        0,
+        Math.min(maxOffset, playheadX - trackViewportWidthShared.value / 2),
+      );
+      scrollOffset.value = targetOffset;
+      scrollTo(timelineScrollRef, targetOffset, 0, false);
+    }
+  }, [
+    totalContentWidthShared,
+    trackViewportWidthShared,
+    totalDurationShared,
+    playheadTime,
+    scrollOffset,
+    timelineScrollRef,
+  ]);
+
   useFrameCallback(({ timeSincePreviousFrame }) => {
     if (!isPlayingShared.value) return;
     if (totalDurationShared.value <= 0) return;
@@ -1235,12 +1270,18 @@ const PhotosTimeline: React.FC<PhotosTimelineProps> = ({
 
   const playheadAnimatedStyle = useAnimatedStyle(() => {
     if (totalDurationShared.value <= 0 || totalContentWidthShared.value <= 0) {
-      return { transform: [{ translateX: 0 }] };
+      return {
+        transform: [{ translateX: 0 }],
+        opacity: 1,
+      };
     }
     const x =
       (playheadTime.value / totalDurationShared.value) *
       totalContentWidthShared.value;
-    return { transform: [{ translateX: x }] };
+    return {
+      transform: [{ translateX: x }],
+      opacity: 1,
+    };
   });
 
   const trackTapGesture = Gesture.Tap().onEnd(e => {
@@ -1747,6 +1788,8 @@ const tlStyles = StyleSheet.create({
     backgroundColor: 'rgba(255, 215, 0, 0.85)',
     borderTopLeftRadius: 8,
     borderBottomLeftRadius: 8,
+    zIndex: 10,
+    elevation: 10,
   },
   trimHandleRight: {
     position: 'absolute',
@@ -1759,6 +1802,8 @@ const tlStyles = StyleSheet.create({
     backgroundColor: 'rgba(255, 215, 0, 0.85)',
     borderTopRightRadius: 8,
     borderBottomRightRadius: 8,
+    zIndex: 10,
+    elevation: 10,
   },
   playhead: {
     position: 'absolute',
@@ -1766,10 +1811,11 @@ const tlStyles = StyleSheet.create({
     bottom: -6,
     width: 28,
     left: 0,
-    zIndex: 20,
-    elevation: 20,
+    zIndex: 100,
+    elevation: 100,
     alignItems: 'center',
     marginLeft: -14,
+    pointerEvents: 'auto',
   },
   playheadDot: {
     width: 10,
@@ -2349,7 +2395,7 @@ const PlaybackPreview: React.FC<{
                   ref={activeSegment?.clip.id === displayClip.id ? videoRef : undefined}
                   source={{ uri: normalizeMediaUri(displayClip.localUri) }}
                   style={styles.previewMediaContent}
-                  resizeMode="stretch"
+                  resizeMode="cover"
                   paused={!isPlaying}
                   repeat={false}
                   muted={!soundEnabled}
@@ -2364,7 +2410,7 @@ const PlaybackPreview: React.FC<{
                 entering={getEnteringAnimation(displayClip.transition?.type, displayClip.transition?.duration || 0.5)}
                 source={{ uri: normalizeMediaUri(displayClip.localUri) }}
                 style={styles.previewMediaContent}
-                resizeMode="stretch"
+                resizeMode="cover"
               />
             )}
           </View>
