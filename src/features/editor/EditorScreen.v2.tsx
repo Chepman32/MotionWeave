@@ -36,6 +36,7 @@ import {
   LayoutConfig,
   Project,
   TransformConfig,
+  TransitionConfig,
 } from '../../shared/types';
 import { VideoImportService } from '../../processes/video-processing/VideoImportService';
 import { ExportModal } from '../export/ExportModal';
@@ -43,6 +44,7 @@ import { useProjectStore } from '../../entities/project/store';
 import { createNewProject } from '../../entities/project/utils';
 import { AppIcon } from '../../shared/components/AppIcon';
 import { PreviewScreen } from '../preview/PreviewScreen';
+import { TransitionsPanel } from './TransitionsPanel';
 import { usePreferencesStore } from '../../shared/stores/preferencesStore';
 import { normalizeMediaUri } from '../../shared/utils/helpers';
 import { DEFAULT_IMAGE_DURATION_SECONDS } from '../../shared/constants/media';
@@ -60,7 +62,7 @@ const AnimatedTouchableOpacity =
 
 const PIXELS_PER_SECOND = 40;
 const MIN_CLIP_DURATION = 0.5;
-const TRIM_HANDLE_WIDTH = 24;
+const TRIM_HANDLE_WIDTH = 12;
 const TIMELINE_CLIP_HEIGHT = 56;
 const PLAYHEAD_COLOR = '#FFFFFF';
 const SELECTED_COLOR = '#FFD700';
@@ -102,7 +104,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
   const [timelineScale, setTimelineScale] = useState(1);
   const [isAssetsExpanded, setIsAssetsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    'layout' | 'effects' | 'audio' | 'export'
+    'layout' | 'effects' | 'audio' | 'transitions'
   >('layout');
   const [, setIsImporting] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -351,6 +353,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
           aspectRatio,
           filters: [],
           volume: 1.0,
+          transition: { type: 'none', duration: 0.5 },
         };
       });
 
@@ -572,6 +575,26 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
 
       const updatedVideos = project.videos.map(v =>
         v.id === clipId ? { ...v, transform: nextTransform } : v,
+      );
+
+      const updatedProject = {
+        ...project,
+        videos: updatedVideos,
+        updatedAt: Date.now(),
+      };
+
+      commitProject(updatedProject);
+      updateProject(project.id, updatedProject);
+    },
+    [project, commitProject, updateProject],
+  );
+
+  const handleTransitionChange = useCallback(
+    (clipId: string, transition: TransitionConfig) => {
+      if (!project) return;
+
+      const updatedVideos = project.videos.map(v =>
+        v.id === clipId ? { ...v, transition } : v,
       );
 
       const updatedProject = {
@@ -900,7 +923,7 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
       {/* Tools Drawer */}
       <View style={[styles.toolsDrawer, { backgroundColor: colors.surface }]}>
         <View style={styles.toolsTabs}>
-          {(['layout', 'effects', 'audio', 'export'] as const).map(tab => (
+          {(['layout', 'effects', 'audio', 'transitions'] as const).map(tab => (
             <TouchableOpacity
               key={tab}
               onPress={() => setActiveTab(tab)}
@@ -928,6 +951,8 @@ export const EditorScreenV2: React.FC<EditorScreenV2Props> = ({
             activeTab={activeTab}
             onSave={handleSave}
             onPreview={handleOpenPreview}
+            selectedClip={selectedClip}
+            onTransitionChange={handleTransitionChange}
           />
         </View>
       </View>
@@ -2326,8 +2351,19 @@ const ToolsContent: React.FC<{
   activeTab: string;
   onSave: () => void;
   onPreview: () => void;
-}> = ({ activeTab, onSave, onPreview }) => {
+  selectedClip: MediaClip | null;
+  onTransitionChange: (clipId: string, transition: TransitionConfig) => void;
+}> = ({ activeTab, onSave, onPreview, selectedClip, onTransitionChange }) => {
   const { colors } = useTheme();
+
+  if (activeTab === 'transitions') {
+    return (
+      <TransitionsPanel
+        selectedClip={selectedClip}
+        onTransitionChange={onTransitionChange}
+      />
+    );
+  }
 
   if (activeTab === 'export') {
     return (

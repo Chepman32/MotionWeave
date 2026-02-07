@@ -27,6 +27,7 @@ export interface MediaClip {
   aspectRatio?: number;
   filters: FilterConfig[];
   volume: number;
+  transition?: TransitionConfig;
 }
 
 export interface LayoutConfig {
@@ -56,6 +57,11 @@ export interface TransformConfig {
 export interface FilterConfig {
   type: 'none' | 'vivid' | 'bw' | 'vintage' | 'cinematic' | 'cool' | 'warm';
   intensity: number;
+}
+
+export interface TransitionConfig {
+  type: 'none' | 'slide-up' | 'slide-left' | 'slide-right' | 'slide-down' | 'fade-in' | 'fade-out' | 'rotating' | 'zoom-in' | 'zoom-out';
+  duration: number; // in seconds (0.2 - 2.0)
 }
 
 export interface ProjectSettings {
