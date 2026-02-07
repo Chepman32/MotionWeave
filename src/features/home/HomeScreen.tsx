@@ -64,10 +64,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [folderSelectorVisible, setFolderSelectorVisible] = useState(false);
   const [createFolderVisible, setCreateFolderVisible] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const fabOpacity = useSharedValue(1);
 
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  useEffect(() => {
+    fabOpacity.value = withTiming(createFolderVisible ? 0 : 1, {
+      duration: 220,
+    });
+  }, [createFolderVisible, fabOpacity]);
+
+  const fabFadeStyle = useAnimatedStyle(() => ({
+    opacity: fabOpacity.value,
+  }));
 
   const handleProjectPress = (project: Project) => {
     setCurrentProject(project);
@@ -75,7 +86,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   };
 
   const trashFolder = folders.find(f => f.type === 'trash');
-  const isProjectInTrash = (project: Project) => project.folderId === trashFolder?.id;
+  const isProjectInTrash = (project: Project) =>
+    Boolean(trashFolder?.id) && project.folderId === trashFolder?.id;
 
   const handleFastPreview = (project: Project) => {
     setSelectedProject(project);
@@ -210,6 +222,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     setCreateFolderVisible(true);
   };
 
+  const handleOpenCreateFolder = () => {
+    setCreateFolderVisible(true);
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
@@ -218,18 +234,32 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <Text style={[styles.logo, { color: colors.textPrimary }]}>
           MotionWeave
         </Text>
-        <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={onNavigateToSettings}
-          accessibilityRole="button"
-          accessibilityLabel="Settings"
-        >
-          <AppIcon
-            name="settings-outline"
-            size={22}
-            color={colors.textPrimary}
-          />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[styles.newFolderButton, { backgroundColor: colors.surface }]}
+            onPress={handleOpenCreateFolder}
+            accessibilityRole="button"
+            accessibilityLabel="Create folder"
+          >
+            <AppIcon name="folder-open-outline" size={16} color={colors.primary} />
+            <Text style={[styles.newFolderText, { color: colors.textPrimary }]}>
+              New Folder
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.settingsButton}
+            onPress={onNavigateToSettings}
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+          >
+            <AppIcon
+              name="settings-outline"
+              size={22}
+              color={colors.textPrimary}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Content */}
@@ -286,7 +316,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       )}
 
       {/* FAB */}
-      <FAB onPress={onNavigateToEditor} />
+      <Animated.View
+        style={fabFadeStyle}
+        pointerEvents={createFolderVisible ? 'none' : 'auto'}
+      >
+        <FAB onPress={onNavigateToEditor} />
+      </Animated.View>
 
       {/* Bottom Navigation */}
       <AppBottomNav
@@ -373,6 +408,23 @@ const styles = StyleSheet.create({
   },
   logo: {
     ...TYPOGRAPHY.h2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  newFolderButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: 10,
+  },
+  newFolderText: {
+    ...TYPOGRAPHY.caption,
+    fontWeight: '600',
   },
   settingsButton: {
     padding: SPACING.sm,

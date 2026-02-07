@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   ScrollView,
 } from 'react-native';
 import Animated, {
@@ -61,14 +60,6 @@ export const FolderSelectorModal: React.FC<FolderSelectorModalProps> = ({
             onPress={onCreateNewFolder}
             colors={colors}
             isCreate
-          />
-
-          <FolderItem
-            label="All Projects"
-            icon="apps-outline"
-            isSelected={currentFolderId === null}
-            onPress={() => handleSelectFolder(null)}
-            colors={colors}
           />
 
           {customFolders.map(folder => (

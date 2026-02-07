@@ -6,9 +6,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
+  Modal,
 } from 'react-native';
 import { useTheme } from '../../shared/hooks/useTheme';
-import { BottomSheet } from '../../shared/components/BottomSheet';
 import { SPACING, TYPOGRAPHY } from '../../shared/constants/theme';
 
 interface CreateFolderModalProps {
@@ -32,11 +32,12 @@ export const CreateFolderModal: React.FC<CreateFolderModalProps> = ({
   useEffect(() => {
     if (visible) {
       setFolderName('');
-      // Auto-focus after a short delay to ensure modal is fully visible
-      setTimeout(() => {
+      const focusTimer = setTimeout(() => {
         inputRef.current?.focus();
-      }, 300);
+      }, 200);
+      return () => clearTimeout(focusTimer);
     }
+    return undefined;
   }, [visible]);
 
   const handleCreate = async () => {
@@ -56,7 +57,7 @@ export const CreateFolderModal: React.FC<CreateFolderModalProps> = ({
     try {
       await onCreateFolder(trimmedName);
       onClose();
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Failed to create folder. Please try again.');
     } finally {
       setIsCreating(false);
@@ -64,70 +65,103 @@ export const CreateFolderModal: React.FC<CreateFolderModalProps> = ({
   };
 
   return (
-    <BottomSheet isVisible={visible} onClose={onClose} snapPoints={[0.35]}>
-      <View style={styles.container}>
-        <Text style={[styles.title, { color: colors.textPrimary }]}>
-          Create New Folder
-        </Text>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={styles.overlay}>
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={onClose}
+        />
 
-        <TextInput
-          ref={inputRef}
+        <View
           style={[
-            styles.input,
+            styles.container,
             {
-              backgroundColor: colors.background,
-              color: colors.textPrimary,
+              backgroundColor: colors.surface,
               borderColor: colors.border,
             },
           ]}
-          placeholder="Folder name"
-          placeholderTextColor={colors.textSecondary}
-          value={folderName}
-          onChangeText={setFolderName}
-          autoCapitalize="words"
-          returnKeyType="done"
-          onSubmitEditing={handleCreate}
-          maxLength={50}
-        />
+        >
+          <Text style={[styles.title, { color: colors.textPrimary }]}>
+            Create New Folder
+          </Text>
 
-        <View style={styles.buttons}>
-          <TouchableOpacity
+          <TextInput
+            ref={inputRef}
             style={[
-              styles.button,
-              styles.cancelButton,
-              { backgroundColor: colors.background },
+              styles.input,
+              {
+                backgroundColor: colors.background,
+                color: colors.textPrimary,
+                borderColor: colors.border,
+              },
             ]}
-            onPress={onClose}
-            disabled={isCreating}
-          >
-            <Text style={[styles.buttonText, { color: colors.textPrimary }]}>
-              Cancel
-            </Text>
-          </TouchableOpacity>
+            placeholder="Folder name"
+            placeholderTextColor={colors.textSecondary}
+            value={folderName}
+            onChangeText={setFolderName}
+            autoCapitalize="words"
+            returnKeyType="done"
+            onSubmitEditing={handleCreate}
+            maxLength={50}
+          />
 
-          <TouchableOpacity
-            style={[
-              styles.button,
-              styles.createButton,
-              { backgroundColor: colors.primary },
-              isCreating && { opacity: 0.6 },
-            ]}
-            onPress={handleCreate}
-            disabled={isCreating}
-          >
-            <Text style={[styles.buttonText, { color: '#FFFFFF' }]}>
-              {isCreating ? 'Creating...' : 'Create'}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.buttons}>
+            <TouchableOpacity
+              style={[
+                styles.button,
+                styles.cancelButton,
+                { backgroundColor: colors.background },
+              ]}
+              onPress={onClose}
+              disabled={isCreating}
+            >
+              <Text style={[styles.buttonText, { color: colors.textPrimary }]}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.button,
+                styles.createButton,
+                { backgroundColor: colors.primary },
+                isCreating ? styles.buttonDisabled : undefined,
+              ]}
+              onPress={handleCreate}
+              disabled={isCreating}
+            >
+              <Text style={styles.createButtonText}>
+                {isCreating ? 'Creating...' : 'Create'}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
-    </BottomSheet>
+    </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.lg,
+  },
   container: {
     padding: SPACING.lg,
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 16,
+    borderWidth: 1,
   },
   title: {
     ...TYPOGRAPHY.h3,
@@ -154,8 +188,16 @@ const styles = StyleSheet.create({
   },
   cancelButton: {},
   createButton: {},
+  buttonDisabled: {
+    opacity: 0.6,
+  },
   buttonText: {
     ...TYPOGRAPHY.body,
     fontWeight: '600',
+  },
+  createButtonText: {
+    ...TYPOGRAPHY.body,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });

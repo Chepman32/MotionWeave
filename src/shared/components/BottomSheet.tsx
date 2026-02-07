@@ -29,20 +29,21 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   const { colors } = useTheme();
   const translateY = useSharedValue(SCREEN_HEIGHT);
   const backdropOpacity = useSharedValue(0);
+  const openSnapPoint = snapPoints.length > 1 ? snapPoints[1] : snapPoints[0] || 0.5;
 
   useEffect(() => {
     if (isVisible) {
-      translateY.value = withSpring(SCREEN_HEIGHT * (1 - snapPoints[1]));
+      translateY.value = withSpring(SCREEN_HEIGHT * (1 - openSnapPoint));
       backdropOpacity.value = withTiming(1, { duration: 300 });
     } else {
       translateY.value = withSpring(SCREEN_HEIGHT);
       backdropOpacity.value = withTiming(0, { duration: 300 });
     }
-  }, [backdropOpacity, isVisible, snapPoints, translateY]);
+  }, [backdropOpacity, isVisible, openSnapPoint, translateY]);
 
   const panGesture = Gesture.Pan()
     .onUpdate(e => {
-      const newY = SCREEN_HEIGHT * (1 - snapPoints[1]) + e.translationY;
+      const newY = SCREEN_HEIGHT * (1 - openSnapPoint) + e.translationY;
       if (newY > 0) {
         translateY.value = newY;
       }

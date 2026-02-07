@@ -8,10 +8,12 @@ import {
 } from 'react-native';
 import Video from 'react-native-video';
 import Animated, {
-  useSharedValue,
+  FadeIn,
+  FadeOut,
+  Layout,
   useAnimatedStyle,
+  useSharedValue,
   withTiming,
-  interpolate,
 } from 'react-native-reanimated';
 import { MenuView, MenuAction, NativeActionEvent } from '@react-native-menu/menu';
 import { useTheme } from '../../shared/hooks/useTheme';
@@ -47,26 +49,26 @@ export const FoldersAccordion: React.FC<FoldersAccordionProps> = ({
   onToggleFolderCollapse,
 }) => {
   const { colors } = useTheme();
+  const [isAllProjectsCollapsed, setIsAllProjectsCollapsed] = useState(false);
 
   // Get projects by folder
-  const allProjects = projects.filter(p => !p.folderId);
-  const customFolders = folders.filter(f => f.type === 'custom');
   const trashFolder = folders.find(f => f.type === 'trash');
+  const allProjects = projects.filter(p => p.folderId !== trashFolder?.id);
+  const customFolders = folders.filter(f => f.type === 'custom');
 
   return (
     <View style={styles.container}>
-      {/* All Projects Folder (always visible, never collapsed) */}
+      {/* All Projects Folder */}
       <FolderSection
         title="All Projects"
         icon="apps-outline"
         projects={allProjects}
-        isCollapsed={false}
-        onToggleCollapse={() => {}}
+        isCollapsed={isAllProjectsCollapsed}
+        onToggleCollapse={() => setIsAllProjectsCollapsed(prev => !prev)}
         onProjectPress={onProjectPress}
         onProjectContextAction={onProjectContextAction}
         trashFolderId={trashFolder?.id}
         colors={colors}
-        showChevron={false}
       />
 
       {/* Custom Folders */}
@@ -132,41 +134,15 @@ const FolderSection: React.FC<{
   colors,
   showChevron = true,
 }) => {
-  const [contentHeight, setContentHeight] = useState(0);
-  const animatedHeight = useSharedValue(isCollapsed ? 0 : 1);
   const chevronRotation = useSharedValue(isCollapsed ? 0 : 90);
 
   React.useEffect(() => {
-    if (contentHeight > 0) {
-      animatedHeight.value = withTiming(isCollapsed ? 0 : 1, { duration: 300 });
-      chevronRotation.value = withTiming(isCollapsed ? 0 : 90, { duration: 300 });
-    }
-  }, [isCollapsed, contentHeight, animatedHeight, chevronRotation]);
-
-  const contentStyle = useAnimatedStyle(() => {
-    if (contentHeight === 0) {
-      return {
-        height: undefined,
-        opacity: 1,
-      };
-    }
-    return {
-      height: interpolate(animatedHeight.value, [0, 1], [0, contentHeight]),
-      opacity: animatedHeight.value,
-      overflow: 'hidden',
-    };
-  });
+    chevronRotation.value = withTiming(isCollapsed ? 0 : 90, { duration: 250 });
+  }, [chevronRotation, isCollapsed]);
 
   const chevronStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${chevronRotation.value}deg` }],
   }));
-
-  const handleLayout = (event: any) => {
-    const { height } = event.nativeEvent.layout;
-    if (height > 0 && contentHeight === 0) {
-      setContentHeight(height);
-    }
-  };
 
   return (
     <View style={styles.folderSection}>
@@ -189,31 +165,38 @@ const FolderSection: React.FC<{
         )}
       </TouchableOpacity>
 
-      <Animated.View style={contentStyle}>
-        <View onLayout={handleLayout}>
-          {projects.length === 0 ? (
-            <View style={styles.emptyFolder}>
-              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                No projects in this folder
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.projectsGrid}>
-              {projects.map(project => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  onPress={() => onProjectPress(project)}
-                  onContextAction={actionId =>
-                    onProjectContextAction(project, actionId)
-                  }
-                  isInTrash={project.folderId === trashFolderId}
-                  colors={colors}
-                />
-              ))}
-            </View>
-          )}
-        </View>
+      <Animated.View layout={Layout.duration(260)}>
+        {!isCollapsed && (
+          <Animated.View
+            entering={FadeIn.duration(180)}
+            exiting={FadeOut.duration(140)}
+          >
+            {projects.length === 0 ? (
+              <View style={styles.emptyFolder}>
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  No projects in this folder
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.projectsGrid}>
+                {projects.map(project => (
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    onPress={() => onProjectPress(project)}
+                    onContextAction={actionId =>
+                      onProjectContextAction(project, actionId)
+                    }
+                    isInTrash={
+                      Boolean(trashFolderId) && project.folderId === trashFolderId
+                    }
+                    colors={colors}
+                  />
+                ))}
+              </View>
+            )}
+          </Animated.View>
+        )}
       </Animated.View>
     </View>
   );
